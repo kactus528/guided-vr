@@ -3,6 +3,7 @@ import { AIConversationManager } from '../ai/AIConversationManager.js';
 import { CRISIS_MESSAGE } from '../ai/AISafetyController.js';
 import type { SessionSnapshot } from '../ai/ConversationContextBuilder.js';
 import { selectRelevant } from '../ai/JournalRetrievalService.js';
+import { LOCAL_MODELS } from '../ai/LocalWhisper.js';
 import { SpeechRecognitionAdapter } from '../ai/SpeechRecognitionAdapter.js';
 import type { AIConfig, AIReply } from '../ai/types.js';
 import { getAudioContext, unlockAudio } from '../audio/audioContext.js';
@@ -99,6 +100,7 @@ export class App {
   private textSaveTimer: number | null = null;
   private aiCfg = new AIConfigStore();
   private ai: AIConversationManager;
+  private stt: SpeechRecognitionAdapter;
   private crisisNote: string | null = null;
   private aiScreenNote: string | null = null;
   private patternCount = 0;
@@ -117,9 +119,12 @@ export class App {
         this.render();
       },
     );
+    this.stt = new SpeechRecognitionAdapter(() => this.aiCfg.get());
+    this.stt.local.onStatus = () => this.render();
+    if (this.aiCfg.get().stt === 'browser' && !SpeechRecognitionAdapter.browserAvailable()) this.aiCfg.set('stt', 'local');
     this.ai = new AIConversationManager(
       this.aiCfg,
-      new SpeechRecognitionAdapter(() => this.aiCfg.get()),
+      this.stt,
       async (answers) => selectRelevant(answers, (await this.journal.list()).filter((r) => r.id !== this.record?.id)),
       () => this.journal.patterns(),
       () => this.render(),
@@ -662,7 +667,9 @@ export class App {
         you: this.ai.lastReply || this.ai.state === 'thinking' ? lastUser?.text : undefined,
         guide: this.ai.lastReply?.say,
         hypothesis: this.ai.pendingHypothesis ?? undefined,
-        notice: this.ai.notice ?? (!this.aiCfg.ready() && this.aiCfg.get().provider !== 'scripted' ? 'AI guide needs setup and consent (main menu → AI Guide). Using built-in prompts.' : undefined),
+        notice: (this.aiCfg.get().stt === 'local' && this.stt.local.status === 'downloading'
+          ? `Downloading the speech model… ${Math.round(this.stt.local.progress * 100)}% (one time only)` : null)
+          ?? this.ai.notice ?? (!this.aiCfg.ready() && this.aiCfg.get().provider !== 'scripted' ? 'AI guide needs setup and consent (main menu → AI Guide). Using built-in prompts.' : undefined),
         draft: this.ai.draft,
       });
     }
@@ -1265,11 +1272,28 @@ export class App {
     if (c.provider !== 'off') {
       blocks.push({
         kind: 'choice', field: 'cfg:stt', label: 'Voice input', selected: c.stt, options: [
-          { value: 'browser', label: SpeechRecognitionAdapter.browserAvailable() ? 'Browser speech recognition' : 'Browser speech (not available here)' },
+          { value: 'local', label: 'On the headset (private)' },
+          ...(SpeechRecognitionAdapter.browserAvailable() ? [{ value: 'browser', label: 'Browser speech recognition' }] : []),
           { value: 'whisper', label: 'Whisper-compatible service' },
           { value: 'typing', label: 'Typing only' },
         ],
       });
+      if (c.stt === 'local') {
+        const L = this.stt.local;
+        blocks.push({ kind: 'choice', field: 'cfg:localModel', label: 'Speech model', selected: c.localModel, options: LOCAL_MODELS.map((m) => ({ value: m.id, label: m.label })) });
+        const st = L.status === 'ready' ? 'Speech model ready.'
+          : L.status === 'downloading' ? `Downloading speech model… ${Math.round(L.progress * 100)}%`
+            : L.status === 'error' ? `Speech model error: ${L.error}`
+              : 'Speech model not downloaded yet. It downloads once (from Hugging Face) and is then stored on the headset.';
+        blocks.push({ kind: 'note', tone: L.status === 'error' ? 'warn' : 'info', text: `${st} Your voice is transcribed on the headset and never sent anywhere. Each reply takes a few seconds to transcribe on a Quest 2.` });
+        blocks.push({
+          kind: 'buttons', columns: 1, items: [{
+            id: 'aiset:download',
+            label: L.status === 'ready' ? 'Speech model downloaded' : L.status === 'downloading' ? 'Downloading…' : 'Download speech model now',
+            style: L.status === 'ready' || L.status === 'downloading' ? 'disabled' : 'normal',
+          }],
+        });
+      }
       if (c.stt === 'whisper') {
         blocks.push({ kind: 'text', field: 'cfg:sttKey', secret: true, disabledText: inVR, value: c.sttKey, label: 'Transcription API key', placeholder: 'sk-…' });
         blocks.push({ kind: 'text', field: 'cfg:sttBaseUrl', disabledText: inVR, value: c.sttBaseUrl, label: 'Transcription base URL' });
@@ -1289,7 +1313,7 @@ export class App {
         'the current step, your chosen target, feelings, beliefs and ratings',
         ...(c.includeHistory ? ['short text summaries of a few related past sessions, and your confirmed patterns'] : []),
       ];
-      const audio = c.stt === 'browser' ? ' Browser speech recognition may send your voice to the browser maker (for Chrome-based browsers, Google) to transcribe it.'
+      const audio = c.stt === 'local' ? ' Speech is transcribed on the headset, so your voice is not sent.' : c.stt === 'browser' ? ' Browser speech recognition may send your voice to the browser maker (for Chrome-based browsers, Google) to transcribe it.'
         : c.stt === 'whisper' ? ' With Whisper, your spoken clip is sent to the transcription service.' : '';
       blocks.push({
         kind: 'note', tone: 'warn',
@@ -1317,6 +1341,9 @@ export class App {
 
   private async aiScreenAction(a: string): Promise<void> {
     switch (a) {
+      case 'download':
+        this.stt.local.preload().catch(() => undefined);
+        break;
       case 'consent':
         this.aiCfg.consent();
         this.aiScreenNote = 'Consent recorded for this provider. Changing provider, voice input, or history sharing will ask again.';

@@ -1,4 +1,5 @@
 import { MicrophoneRecorder } from '../audio/MicrophoneRecorder.js';
+import { LocalWhisper } from './LocalWhisper.js';
 import type { AIConfig } from './types.js';
 
 type SR = {
@@ -17,6 +18,7 @@ function srCtor(): (new () => SR) | null {
  * Push-to-talk speech-to-text.
  *  - browser: the Web Speech API (may send audio to the browser maker's servers)
  *  - whisper: records locally, then sends the clip to an OpenAI-compatible /audio/transcriptions endpoint
+ *  - local: records locally and transcribes on the headset with Whisper (nothing sent)
  *  - typing: no speech; the user types (browser view)
  */
 export class SpeechRecognitionAdapter {
@@ -27,7 +29,11 @@ export class SpeechRecognitionAdapter {
   onInterim: (text: string) => void = () => {};
   listening = false;
 
-  constructor(private getCfg: () => AIConfig) {}
+  readonly local: LocalWhisper;
+
+  constructor(private getCfg: () => AIConfig) {
+    this.local = new LocalWhisper(() => this.getCfg().localModel);
+  }
 
   static browserAvailable(): boolean {
     return srCtor() !== null;
@@ -37,6 +43,7 @@ export class SpeechRecognitionAdapter {
     const m = this.getCfg().stt;
     if (m === 'browser') return SpeechRecognitionAdapter.browserAvailable();
     if (m === 'whisper') return MicrophoneRecorder.supported() && !!this.getCfg().sttKey;
+    if (m === 'local') return MicrophoneRecorder.supported() && LocalWhisper.supported();
     return false;
   }
 
@@ -66,7 +73,7 @@ export class SpeechRecognitionAdapter {
       sr.onerror = () => undefined;
       this.sr = sr;
       sr.start();
-    } else if (cfg.stt === 'whisper') {
+    } else if (cfg.stt === 'whisper' || cfg.stt === 'local') {
       await this.rec.start();
     } else {
       throw new Error('Voice input is off — type instead.');
@@ -87,6 +94,10 @@ export class SpeechRecognitionAdapter {
         setTimeout(res, 1500);
       });
       return `${this.finalText} ${this.interim}`.trim();
+    }
+    if (cfg.stt === 'local') {
+      const clip = await this.rec.stop();
+      return clip ? this.local.transcribe(clip.blob) : '';
     }
     if (cfg.stt === 'whisper') {
       const clip = await this.rec.stop();

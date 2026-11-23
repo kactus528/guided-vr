@@ -100,3 +100,21 @@ test('providers send the right requests (mocked fetch)', async () => {
     globalThis.fetch = realFetch;
   }
 });
+
+test('local whisper: mixdown averages channels; consent kept when switching to on-headset speech', async () => {
+  const { mixdown } = await import('../src/ai/LocalWhisper.js');
+  const out = mixdown([new Float32Array([1, 0, -1]), new Float32Array([0, 0, 1])]);
+  assert.deepEqual(Array.from(out), [0.5, 0, 0]);
+  const mem: Record<string, string> = {};
+  (globalThis as unknown as { localStorage: Storage }).localStorage = {
+    getItem: (k: string) => mem[k] ?? null, setItem: (k: string, v: string) => { mem[k] = v; },
+  } as unknown as Storage;
+  const { AIConfigStore } = await import('../src/ai/AIConfigStore.js');
+  const s = new AIConfigStore();
+  s.set('provider', 'anthropic'); s.set('apiKey', 'k'); s.set('stt', 'typing'); s.consent();
+  assert.equal(s.ready(), true);
+  s.set('stt', 'local');
+  assert.equal(s.ready(), true, 'on-headset speech sends less, so consent stands');
+  s.set('stt', 'browser');
+  assert.equal(s.ready(), false, 'browser speech may send audio → ask again');
+});

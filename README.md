@@ -80,7 +80,9 @@ During reflection steps you can talk or type to a conversational guide (main men
   - Any OpenAI-compatible endpoint (OpenAI, OpenRouter, or a local server).
   - Your own proxy (`proxy/worker.js`, a Cloudflare Worker that keeps the key off the headset).
   - Built-in offline prompts, which are also the automatic fallback when the AI is unavailable or fails.
-- **Voice:** push-to-talk through browser speech recognition or a Whisper-compatible service, or typing only. Replies are spoken with browser TTS and shown as subtitles.
+- **Voice:** push-to-talk.
+  - **On the headset (default, private):** Whisper tiny.en or base.en through Transformers.js, in a Web Worker. The model downloads once from Hugging Face and is cached, and audio never leaves the device.
+  - **Alternatives:** browser speech recognition (where available; not in the Quest browser), a Whisper-compatible service, or typing only. Replies are spoken with browser TTS and shown as subtitles.
 - **Consent:** nothing is sent until you consent for the chosen provider. Changing provider, voice input or history sharing asks again. Past-session history and confirmed patterns are off by default; when on, only a few related sessions go out, as short text summaries. Raw recordings never leave the device.
 - **Control:** the guide can only *request* `repeat_instruction`, `record_reflection`, `show_emotional_rating`, `pause_session`, `begin_grounding` or `finish_session`. A deterministic validator checks each request against the current stage, and anything else is ignored. The guide can't start sets or change stimulation.
 - **Safety:** deterministic keyword checks run on what you say *before* anything reaches the AI.

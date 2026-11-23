@@ -1,5 +1,5 @@
 export type ProviderId = 'off' | 'anthropic' | 'openai' | 'proxy' | 'scripted';
-export type SttMode = 'browser' | 'whisper' | 'typing';
+export type SttMode = 'local' | 'browser' | 'whisper' | 'typing';
 
 export interface AIConfig {
   provider: ProviderId;
@@ -10,6 +10,7 @@ export interface AIConfig {
   sttBaseUrl: string;
   sttKey: string;
   sttModel: string;
+  localModel: string;
   includeHistory: boolean;
   speakReplies: boolean;
   /** Consent is recorded per provider; changing provider requires consenting again. */
@@ -21,10 +22,11 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
   apiKey: '',
   model: '',
   baseUrl: '',
-  stt: 'browser',
+  stt: 'local',
   sttBaseUrl: 'https://api.openai.com/v1',
   sttKey: '',
   sttModel: 'whisper-1',
+  localModel: 'Xenova/whisper-tiny.en',
   includeHistory: false,
   speakReplies: true,
   consent: null,

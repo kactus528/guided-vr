@@ -75,6 +75,7 @@ export class AIConversationManager {
 
   async stopListening(snap: SessionSnapshot): Promise<{ reply: AIReply | null; safety: SafetyVerdict; text: string }> {
     this.state = 'thinking';
+    if (this.cfg.get().stt === 'local') this.notice = 'Transcribing on the headset…';
     this.onChange();
     let text = '';
     try {
@@ -83,6 +84,7 @@ export class AIConversationManager {
       this.notice = (e as Error).message;
     }
     this.interim = '';
+    if (this.notice === 'Transcribing on the headset…') this.notice = null;
     if (!text) {
       this.state = 'idle';
       this.notice = this.notice ?? "I didn't catch anything. Try again, or type instead.";

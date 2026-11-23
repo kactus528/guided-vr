@@ -27,7 +27,7 @@ export class AIConfigStore {
       if (v === 'openai' && !next.baseUrl) next.baseUrl = 'https://api.openai.com/v1';
       next.consent = null; // new destination → ask again
     }
-    if (k === 'includeHistory' || k === 'stt') next.consent = null;
+    if (k === 'includeHistory' || (k === 'stt' && (v === 'browser' || v === 'whisper'))) next.consent = null;
     this.c = next;
     this.save();
   }
@@ -35,7 +35,7 @@ export class AIConfigStore {
   consent(): void {
     this.c = {
       ...this.c,
-      consent: { provider: this.c.provider, at: new Date().toISOString(), history: this.c.includeHistory, audio: this.c.stt !== 'typing' },
+      consent: { provider: this.c.provider, at: new Date().toISOString(), history: this.c.includeHistory, audio: this.c.stt === 'browser' || this.c.stt === 'whisper' },
     };
     this.save();
   }
