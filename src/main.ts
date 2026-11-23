@@ -14,6 +14,6 @@ app.init().catch((e) => {
 // Offline support after first load (production builds only).
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('SW registration failed', e));
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch((e) => console.warn('SW registration failed', e));
   });
 }

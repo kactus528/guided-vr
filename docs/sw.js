@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Network-first for same-origin GETs, cache fallback offline. Nothing user-generated is
 // ever sent anywhere: recordings and journal entries live in IndexedDB only.
-const CACHE = 'gvr-v2';
+const CACHE = 'gvr-v3';
 const SHELL = ['./', './index.html', './app.js', './three.module.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
@@ -22,7 +22,8 @@ self.addEventListener('fetch', (e) => {
   if (!cacheable) return;
   // Network first so updates show up immediately; fall back to the cache when offline.
   e.respondWith(
-    fetch(req)
+    // 'no-cache' revalidates with the server instead of trusting GitHub Pages' 10-minute HTTP cache.
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();
