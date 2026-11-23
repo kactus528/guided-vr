@@ -20,6 +20,7 @@ export type StageId =
   | 'closure'
   | 'summary'
   | 'followup'
+  | 'measure'
   | 'grounding';
 
 export type EnvironmentId = 'void' | 'grounding';
@@ -43,6 +44,8 @@ export interface Condition {
   in?: string[];
   /** Numeric answer `field` >= gte. */
   gte?: number;
+  /** Numeric answer `field` <= lte. */
+  lte?: number;
   /** Completed set count >= n. */
   setCountGte?: number;
 }
@@ -53,7 +56,7 @@ export interface Option {
 }
 
 export type InputDef =
-  | { kind: 'choice'; field: string; label?: string; options: Option[]; autoAdvance?: boolean; when?: Condition }
+  | { kind: 'choice'; field: string; label?: string; options: Option[]; autoAdvance?: boolean; numeric?: boolean; when?: Condition }
   | { kind: 'chips'; field: string; label?: string; items: string[]; multi: boolean; when?: Condition }
   | { kind: 'rating'; field: string; label: string; min: number; max: number; minLabel?: string; maxLabel?: string; when?: Condition }
   | { kind: 'text'; field: string; label?: string; placeholder?: string; when?: Condition }
@@ -98,7 +101,8 @@ export interface StepDef {
   when?: Condition;
   environment?: EnvironmentId;
   onEnter?: Effect[];
-  stim?: { countsAsSet: boolean; duration?: number };
+  /** Optional per-step overrides (e.g. slow, short resource sets). */
+  stim?: { countsAsSet: boolean; duration?: number; speed?: number };
 }
 
 export interface SessionDefinition {
@@ -108,6 +112,8 @@ export interface SessionDefinition {
   start: string;
   /** Where a stimulation step goes once stimulation is locked for the session. */
   stimLockedFallback: string;
+  /** Step that grounding / End offer as a gentle way to finish. */
+  closingStep?: string;
   steps: StepDef[];
 }
 

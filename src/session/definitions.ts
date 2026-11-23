@@ -1,4 +1,8 @@
-import type { SessionDefinition } from './types.js';
+import {
+  ITQ_DSO_FI, ITQ_DSO_FI_INTRO, ITQ_DSO_INTRO, ITQ_DSO_ITEMS,
+  ITQ_PTSD_FI, ITQ_PTSD_FI_INTRO, ITQ_PTSD_INTRO, ITQ_PTSD_ITEMS, ITQ_SCALE,
+} from '../measures/itq.js';
+import type { InputDef, SessionDefinition } from './types.js';
 
 const NEG_BELIEFS = [
   "I'm not good enough",
@@ -43,6 +47,7 @@ export const GUIDED_SESSION: SessionDefinition = {
   title: 'Guided Session',
   start: 'welcome',
   stimLockedFallback: 'closure',
+  closingStep: 'closure',
   steps: [
     // 1. Welcome and orientation
     {
@@ -264,8 +269,14 @@ export const GUIDED_SESSION: SessionDefinition = {
       type: 'form',
       environment: 'void',
       title: 'Bringing it to mind',
-      body:
-        "Let what you chose come to mind, only as much as feels manageable. You don't need to hold onto it or make it stronger.\n\nWhen you're ready, begin the set.",
+      bodyByAnswer: {
+        field: 'processingStyle',
+        map: {
+          restricted:
+            "Bring to mind just the specific part you named — one moment or situation, not the whole history — only as much as feels manageable. You don't need to hold onto it or make it stronger.\n\nWhen you're ready, begin the set.",
+          '*': "Let what you chose come to mind, only as much as feels manageable. You don't need to hold onto it or make it stronger.\n\nWhen you're ready, begin the set.",
+        },
+      },
       narration: {
         segment: 'activation',
         text: "Let what you chose come to mind, only as much as feels manageable. You don't need to hold onto it, or make it stronger. When you're ready, begin the set.",
@@ -321,13 +332,30 @@ export const GUIDED_SESSION: SessionDefinition = {
             { value: 'yes', label: 'Yes' },
           ],
         },
+        {
+          kind: 'choice', field: 'body_{set}', label: 'Does your body feel numb, strange, or not quite your own?', options: [
+            { value: 'no', label: 'No' },
+            { value: 'little', label: 'A little' },
+            { value: 'yes', label: 'Yes' },
+          ],
+        },
+        {
+          kind: 'choice', field: 'far_{set}', label: 'Do sounds or things around you seem far away or foggy?', options: [
+            { value: 'no', label: 'No' },
+            { value: 'little', label: 'A little' },
+            { value: 'yes', label: 'Yes' },
+          ],
+        },
       ],
+      notes: [{ when: { setCountGte: 0 }, text: 'Four quick questions to check you are still here in the room. They are the app\'s own prompts, not a validated scale.' }],
       actions: [
         {
           id: 'continue', label: 'Continue', style: 'primary', goto: 'reflection',
           route: [
             { when: { field: 'present_{set}', in: ['no'] }, goto: 'orientation', effects: ['lockStim'] },
             { when: { field: 'unreal_{set}', in: ['yes'] }, goto: 'orientation', effects: ['lockStim'] },
+            { when: { field: 'body_{set}', in: ['yes'] }, goto: 'orientation', effects: ['lockStim'] },
+            { when: { field: 'far_{set}', in: ['yes'] }, goto: 'orientation', effects: ['lockStim'] },
           ],
         },
         { id: 'ground', label: 'I want to pause and ground', goto: 'orientation', effects: ['lockStim'] },
@@ -366,6 +394,11 @@ export const GUIDED_SESSION: SessionDefinition = {
       notes: [
         { when: { field: 'present_{set}', in: ['partly'] }, text: 'If the sense of distance grows, choose Ground at any time.' },
         { when: { field: 'unreal_{set}', in: ['little'] }, text: 'If the sense of distance grows, choose Ground at any time.' },
+        { when: { field: 'body_{set}', in: ['little'] }, text: 'If the sense of distance grows, choose Ground at any time.' },
+        { when: { field: 'far_{set}', in: ['little'] }, text: 'If the sense of distance grows, choose Ground at any time.' },
+        { when: { field: 'sud_{set}', lte: 2 }, text: 'Distress is low right now — a natural point to move toward closing.' },
+        { when: { field: 'sud_{set}', gte: 8 }, tone: 'warn', text: 'Distress is high. Grounding or closing is usually a better next step than another set.' },
+        { when: { field: 'processingStyle', in: ['restricted'], setCountGte: 6 }, text: 'Focused mode suggests stopping after about six sets. Unfinished material can wait for another day.' },
         { when: { setCountGte: 8 }, text: "You've done several sets. It's completely fine to close here." },
       ],
       inputs: [
@@ -385,7 +418,14 @@ export const GUIDED_SESSION: SessionDefinition = {
       type: 'form',
       environment: 'void',
       title: 'Another set',
-      body: "Notice whatever is here now. There's no need to go back to the original memory or make anything stronger.",
+      bodyByAnswer: {
+        field: 'processingStyle',
+        map: {
+          restricted:
+            "Gently return to the same starting point you chose, and notice how it is now. If your mind drifts to other memories, there's no need to follow them — come back to this one, or move to closing.",
+          '*': "Notice whatever is here now. There's no need to go back to the original memory or make anything stronger.",
+        },
+      },
       actions: [
         { id: 'begin', label: 'Begin set', goto: 'stim', style: 'primary' },
         { id: 'settings', label: 'Adjust stimulation', effects: ['settings'] },
@@ -462,6 +502,7 @@ export const FOLLOW_UP: SessionDefinition = {
   title: 'Follow-up check-in',
   start: 'fu_intro',
   stimLockedFallback: 'fu_done',
+  closingStep: 'fu_done',
   steps: [
     {
       id: 'fu_intro',
@@ -519,7 +560,223 @@ export const FOLLOW_UP: SessionDefinition = {
   ],
 };
 
+const itqChoice = (field: string, label: string): InputDef => ({
+  kind: 'choice', field, label, numeric: true,
+  options: ITQ_SCALE.map((o) => ({ value: String(o.value), label: `${o.value} · ${o.label}` })),
+});
+
+/** International Trauma Questionnaire — a monthly self-report measure (past-month timeframe). */
+export const ITQ_SESSION: SessionDefinition = {
+  id: 'itq-v1',
+  version: 1,
+  title: 'Monthly questionnaire (ITQ)',
+  start: 'itq_intro',
+  stimLockedFallback: 'itq_result',
+  closingStep: 'itq_result',
+  steps: [
+    {
+      id: 'itq_intro', stage: 'measure', type: 'form', environment: 'grounding',
+      title: 'International Trauma Questionnaire',
+      body:
+        'A published 18-question measure of PTSD and complex PTSD symptoms over the past month. Taking it about once a month gives you a consistent way to see change over time.\n\n' +
+        'Think of the experience that troubles you most. You only need to keep it in mind — you don\'t need to describe or revisit it. You can skip any question, and you can stop at any time.',
+      notes: [{ when: { setCountGte: 0 }, text: 'It gives a screening result, not a diagnosis. Only a clinician can diagnose PTSD or complex PTSD.' }],
+      inputs: [{ kind: 'text', field: 'itq_experience', label: 'Optional: a short label for that experience', placeholder: 'Optional' }],
+      actions: [
+        { id: 'continue', label: 'Begin', goto: 'itq_p_a', style: 'primary' },
+        { id: 'menu', label: 'Not now', effects: ['menu'] },
+      ],
+    },
+    {
+      id: 'itq_p_a', stage: 'measure', type: 'form', environment: 'grounding', title: 'In the past month… (1 of 6)', body: ITQ_PTSD_INTRO,
+      inputs: ITQ_PTSD_ITEMS.slice(0, 3).map((i) => itqChoice(i.field, i.text)),
+      actions: [{ id: 'continue', label: 'Continue', goto: 'itq_p_b', style: 'primary' }],
+    },
+    {
+      id: 'itq_p_b', stage: 'measure', type: 'form', environment: 'grounding', title: 'In the past month… (2 of 6)', body: 'How much have you been bothered by:',
+      inputs: ITQ_PTSD_ITEMS.slice(3).map((i) => itqChoice(i.field, i.text)),
+      actions: [{ id: 'continue', label: 'Continue', goto: 'itq_p_fi', style: 'primary' }],
+    },
+    {
+      id: 'itq_p_fi', stage: 'measure', type: 'form', environment: 'grounding', title: 'Effects on your life (3 of 6)', body: ITQ_PTSD_FI_INTRO,
+      inputs: ITQ_PTSD_FI.map((i) => itqChoice(i.field, i.text)),
+      actions: [{ id: 'continue', label: 'Continue', goto: 'itq_c_a', style: 'primary' }],
+    },
+    {
+      id: 'itq_c_a', stage: 'measure', type: 'form', environment: 'grounding', title: 'How true is this of you? (4 of 6)', body: ITQ_DSO_INTRO,
+      inputs: ITQ_DSO_ITEMS.slice(0, 3).map((i) => itqChoice(i.field, i.text)),
+      actions: [{ id: 'continue', label: 'Continue', goto: 'itq_c_b', style: 'primary' }],
+    },
+    {
+      id: 'itq_c_b', stage: 'measure', type: 'form', environment: 'grounding', title: 'How true is this of you? (5 of 6)',
+      inputs: ITQ_DSO_ITEMS.slice(3).map((i) => itqChoice(i.field, i.text)),
+      actions: [{ id: 'continue', label: 'Continue', goto: 'itq_c_fi', style: 'primary' }],
+    },
+    {
+      id: 'itq_c_fi', stage: 'measure', type: 'form', environment: 'grounding', title: 'Effects on your life (6 of 6)', body: ITQ_DSO_FI_INTRO,
+      inputs: ITQ_DSO_FI.map((i) => itqChoice(i.field, i.text)),
+      actions: [{ id: 'continue', label: 'See results', goto: 'itq_result', style: 'primary' }],
+    },
+    {
+      id: 'itq_result', stage: 'summary', type: 'summary', environment: 'grounding', title: 'Your results',
+      actions: [{ id: 'finish', label: 'Save and finish', effects: ['complete'], style: 'primary' }],
+    },
+  ],
+};
+
+/**
+ * Resource & Stabilization — modelled on EMDR Resource Development and
+ * Installation (Korn & Leeds, 2002): short, slow sets while focusing on a
+ * positive resource. Sets only continue while the experience stays positive;
+ * if it turns negative, the resource is set aside (not processed).
+ */
+export const RESOURCE_SESSION: SessionDefinition = {
+  id: 'resource-v1',
+  version: 1,
+  title: 'Resource & Stabilization',
+  start: 'res_intro',
+  stimLockedFallback: 'res_close',
+  closingStep: 'res_close',
+  steps: [
+    {
+      id: 'res_intro', stage: 'preparation', type: 'form', environment: 'grounding',
+      title: 'Strengthening a resource',
+      body:
+        'This session works only with something positive: a calm place, a caring presence, a time you felt capable, or a quality you want more of. ' +
+        'You\'ll focus on it during a few short, slow sets of bilateral stimulation.\n\n' +
+        'Nothing distressing is targeted. If the resource brings up something painful, you\'ll set it aside and choose another, or ground.',
+      narration: { segment: 'res_intro', text: 'This session works only with something positive. Short, slow sets help you notice it more fully.' },
+      notes: [{ when: { setCountGte: 0 }, text: 'Based on Resource Development and Installation, a stabilization technique used in EMDR therapy. The evidence for it is still preliminary.' }],
+      actions: [
+        { id: 'continue', label: 'Continue', goto: 'res_pick', style: 'primary' },
+        { id: 'menu', label: 'Back to menu', effects: ['menu'] },
+      ],
+    },
+    {
+      id: 'res_pick', stage: 'target', type: 'form', environment: 'grounding',
+      title: 'Choose a resource',
+      body: 'Pick whichever feels easiest to reach right now. It can be real or imagined.',
+      inputs: [{
+        kind: 'choice', field: 'resourceType', autoAdvance: true, options: [
+          { value: 'place', label: 'A calm or safe place' },
+          { value: 'presence', label: 'A caring presence — a person, animal, or figure' },
+          { value: 'mastery', label: 'A time I felt capable or strong' },
+          { value: 'quality', label: 'A quality I want more of (e.g. patience, courage)' },
+          { value: 'nature', label: 'Something from nature, music, or art' },
+        ],
+      }],
+      next: 'res_describe',
+    },
+    {
+      id: 'res_describe', stage: 'target', type: 'form', environment: 'grounding',
+      title: 'Bring it to mind',
+      bodyByAnswer: {
+        field: 'resourceType',
+        map: {
+          place: 'Picture the place. What do you see? What can you hear, smell, or feel on your skin?',
+          presence: 'Picture them with you. How do they look at you? What would they say? How does it feel to be cared about by them?',
+          mastery: 'Remember a moment when you felt capable. Where were you? What were you doing? Notice how your body felt.',
+          quality: 'Think of a moment when you had this quality, or someone you know who has it. What does it look and feel like?',
+          '*': 'Bring it to mind as fully as you can. What do you see, hear, and feel?',
+        },
+      },
+      inputs: [
+        { kind: 'voice', field: 'res_voice', label: 'Describe it (optional)' },
+        { kind: 'text', field: 'res_text', label: 'Or type' },
+      ],
+      actions: [{ id: 'continue', label: 'Continue', goto: 'res_feel', style: 'primary' }],
+    },
+    {
+      id: 'res_feel', stage: 'baseline', type: 'form', environment: 'grounding',
+      title: 'Notice the good feeling',
+      body: 'Where do you feel it in your body?',
+      inputs: [
+        { kind: 'chips', field: 'res_sensations', multi: true, items: ['Warmth', 'Calm', 'Steadiness', 'Lightness', 'Strength', 'Openness', 'Softness', 'Safety', 'Other'] },
+        { kind: 'rating', field: 'res_strength_0', label: 'How strong is the positive feeling right now?', min: 0, max: 10, minLabel: 'Not at all', maxLabel: 'Very strong' },
+      ],
+      notes: [{ when: { field: 'res_strength_0', lte: 2 }, text: "If it's hard to feel anything positive, that's common. You could pick a different resource, or simply try one short set and see." }],
+      actions: [
+        { id: 'begin', label: 'Begin a short set', goto: 'res_stim', style: 'primary' },
+        { id: 'other', label: 'Choose a different resource', goto: 'res_pick' },
+      ],
+    },
+    {
+      id: 'res_stim', stage: 'stimulation', type: 'stimulation', environment: 'grounding',
+      title: 'Resource set',
+      stim: { countsAsSet: true, duration: 8, speed: 0.6 },
+      next: 'res_check',
+    },
+    {
+      id: 'res_check', stage: 'checkin', type: 'form', environment: 'grounding',
+      title: 'How was that?',
+      inputs: [{
+        kind: 'choice', field: 'res_check_{set}', label: 'Is the experience still positive?', options: [
+          { value: 'positive', label: 'Still positive' },
+          { value: 'mixed', label: 'Mixed' },
+          { value: 'negative', label: 'It turned upsetting' },
+        ],
+      }],
+      actions: [{
+        id: 'continue', label: 'Continue', style: 'primary', goto: 'res_after',
+        route: [{ when: { field: 'res_check_{set}', in: ['negative'] }, goto: 'res_redirect' }],
+      }],
+    },
+    {
+      id: 'res_redirect', stage: 'grounding', type: 'form', environment: 'grounding',
+      title: "Let's set that one aside",
+      body:
+        "That happens sometimes — a positive memory can be linked to something painful. This session isn't the place to work with that, so let's leave it.\n\n" +
+        'Look around, notice the room you are in, and take a slower breath.',
+      actions: [
+        { id: 'other', label: 'Choose a different resource', goto: 'res_pick', style: 'primary' },
+        { id: 'close', label: 'Finish for now', goto: 'res_close' },
+      ],
+    },
+    {
+      id: 'res_after', stage: 'reflection', type: 'form', environment: 'grounding',
+      title: 'What do you notice?',
+      notes: [
+        { when: { field: 'res_check_{set}', in: ['mixed'] }, text: 'If it keeps getting mixed, it may be better to try a different resource or finish here.' },
+        { when: { setCountGte: 5 }, text: 'A few short sets is usually enough. Strengthening works best in small doses.' },
+      ],
+      inputs: [{ kind: 'rating', field: 'res_strength_{set}', label: 'How strong is the positive feeling now?', min: 0, max: 10, minLabel: 'Not at all', maxLabel: 'Very strong' }],
+      actions: [
+        { id: 'again', label: 'Another short set', goto: 'res_stim' },
+        { id: 'cue', label: 'Add a cue word', goto: 'res_cue' },
+        { id: 'close', label: 'Finish', goto: 'res_close', style: 'primary' },
+      ],
+    },
+    {
+      id: 'res_cue', stage: 'integration', type: 'form', environment: 'grounding',
+      title: 'A cue word',
+      body: 'Is there a word or short phrase that captures this resource? You can use it later to call the feeling back.',
+      inputs: [
+        { kind: 'text', field: 'res_cue', label: 'Cue word or phrase' },
+        { kind: 'voice', field: 'res_cue_voice', label: 'Or say it' },
+      ],
+      actions: [
+        { id: 'set', label: 'One more short set with the cue word', goto: 'res_stim' },
+        { id: 'close', label: 'Finish', goto: 'res_close', style: 'primary' },
+      ],
+    },
+    {
+      id: 'res_close', stage: 'closure', type: 'form', environment: 'grounding',
+      title: 'Closing',
+      body: 'Take a breath and notice the room around you. This resource is yours to come back to whenever you like.',
+      notes: [{ when: { present: 'res_cue' }, text: 'Your cue word: "{{res_cue}}". Saying or thinking it can help call the feeling back.' }],
+      actions: [{ id: 'continue', label: 'Continue', goto: 'res_summary', style: 'primary' }],
+    },
+    {
+      id: 'res_summary', stage: 'summary', type: 'summary', environment: 'grounding',
+      title: 'Session summary',
+      actions: [{ id: 'finish', label: 'Finish', effects: ['complete'], style: 'primary' }],
+    },
+  ],
+};
+
 export const DEFINITIONS: Record<string, SessionDefinition> = {
   [GUIDED_SESSION.id]: GUIDED_SESSION,
   [FOLLOW_UP.id]: FOLLOW_UP,
+  [ITQ_SESSION.id]: ITQ_SESSION,
+  [RESOURCE_SESSION.id]: RESOURCE_SESSION,
 };

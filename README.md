@@ -53,6 +53,15 @@ Use **Settings → Position → Reclining** before recentering if you're lying d
 
 Each stimulation set is logged with its settings snapshot, planned and actual duration, beats delivered per modality, average and worst frame time, and why it ended.
 
+## Research-informed additions
+
+- **Monthly questionnaire (ITQ):** the International Trauma Questionnaire (Cloitre et al., 2018), the most widely used self-report measure of ICD-11 PTSD and complex PTSD. The wording is verbatim, since the authors release it for use without change. Results show symptom totals, cluster scores, the published screening rule and your past results. It's a screen, not a diagnosis.
+- **Resource & Stabilization mode:** short (8 s), slow (0.6 cycles/s) sets while focusing on a positive resource, modelled on EMDR Resource Development and Installation (Korn & Leeds, 2002; the evidence is preliminary). Sets continue only while the experience stays positive. If it turns upsetting, the resource is set aside and never processed.
+- **Focused processing (default):** based on stabilization-oriented "restricted" EMDR formats. Later sets return to the same narrow starting point instead of following associations. Gentle stopping cues appear when distress is low (≤ 2) or high (≥ 8), and after about six sets. You can switch to *Open* in Settings.
+- **Expanded present-moment check-in:** four questions (present, unreal, body, far away/foggy). Any "yes" stops stimulation for the session. These are the app's own prompts, not a validated scale.
+
+What the research argued *against*: personalising eye-movement speed to working-memory capacity didn't help in controlled studies, so calibration stays about comfort. "EMDR 2.0"-style extra taxing showed no added effect.
+
 ## Verified vs. not verified
 
 - ✅ Type-checked (strict). Unit tests for the session engine, routing, stimulation lock and beat timing.

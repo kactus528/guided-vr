@@ -144,7 +144,7 @@ export class DomUI {
           .map((it) => `<button type="button" class="chip" aria-pressed="${b.selected.includes(it)}" data-id="${esc(`chip|${b.field}|${it}`)}">${esc(it)}</button>`)
           .join('')}</div></div>`;
       case 'choice':
-        return `<div class="row">${b.label ? `<p class="lbl">${esc(b.label)}</p>` : ''}<div class="${b.stacked ? 'options' : 'presets'}">${b.options
+        return `<div class="row">${b.label ? `<p class="${b.label.length > 40 ? 'q' : 'lbl'}">${esc(b.label)}</p>` : ''}<div class="${b.stacked ? 'options' : 'presets'}">${b.options
           .map((o) => `<button type="button" class="${b.stacked ? 'option' : 'chip'}" aria-pressed="${b.selected === o.value}" data-id="${esc(`choice|${b.field}|${o.value}`)}">${esc(o.label)}</button>`)
           .join('')}</div></div>`;
       case 'rating': {
@@ -152,7 +152,7 @@ export class DomUI {
         for (let n = b.min; n <= b.max; n++) {
           cells.push(`<button type="button" class="cell" aria-pressed="${b.value === n}" data-id="${esc(`rate|${b.field}|${n}`)}">${n}</button>`);
         }
-        return `<div class="row"><p class="lbl">${esc(b.label)}${b.value !== undefined ? ` <button type="button" class="linkbtn" data-id="${esc(`rate|${b.field}|clear`)}">clear</button>` : ''}</p>
+        return `<div class="row"><p class="${b.label.length > 40 ? 'q' : 'lbl'}">${esc(b.label)}${b.value !== undefined ? ` <button type="button" class="linkbtn" data-id="${esc(`rate|${b.field}|clear`)}">clear</button>` : ''}</p>
           <div class="scale" style="--n:${b.max - b.min + 1}">${cells.join('')}</div>
           <div class="ends"><span>${esc(b.minLabel ?? '')}</span><span>${esc(b.maxLabel ?? '')}</span></div></div>`;
       }

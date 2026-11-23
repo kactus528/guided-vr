@@ -5,7 +5,8 @@ import { get as dbGet, uid } from '../data/db.js';
 import { JournalManager, type RecordingRecord } from '../data/JournalManager.js';
 import { EnvironmentManager } from '../env/EnvironmentManager.js';
 import { GROUNDING_TEXT, GroundingManager, ORIENTATION_NARRATION } from '../safety/GroundingManager.js';
-import { FOLLOW_UP, GUIDED_SESSION } from '../session/definitions.js';
+import { scoreItq, type ItqResult } from '../measures/itq.js';
+import { FOLLOW_UP, GUIDED_SESSION, ITQ_SESSION, RESOURCE_SESSION } from '../session/definitions.js';
 import { SessionEngine } from '../session/SessionEngine.js';
 import type { Effect, FollowUpDue, SessionDefinition, SessionRecord, StepDef } from '../session/types.js';
 import { SETTING_ROWS, SettingsManager, type Settings } from '../settings/SettingsManager.js';
@@ -75,6 +76,7 @@ export class App {
   private stimContext: 'session' | 'lab' | null = null;
   private labLast: StimLog | null = null;
   private menuFollowUp: { session: SessionRecord; fu: FollowUpDue } | null = null;
+  private itqHistory: SessionRecord[] = [];
   private journalList: SessionRecord[] = [];
   private detail: { rec: SessionRecord; clips: RecordingRecord[]; confirmDelete: boolean } | null = null;
   private playing: HTMLAudioElement | null = null;
@@ -361,6 +363,7 @@ export class App {
     this.paused = false;
     try {
       this.menuFollowUp = await this.journal.pendingFollowUp();
+      this.itqHistory = (await this.journal.list()).filter((r) => r.definitionId === ITQ_SESSION.id && r.status === 'completed');
     } catch {
       this.menuFollowUp = null;
     }
@@ -387,6 +390,14 @@ export class App {
       if (hero.length) blocks.push({ kind: 'buttons', columns: 2, height: 80, items: hero });
     }
     blocks.push({ kind: 'buttons', columns: 1, height: 96, items: [{ id: 'menu:guided', label: 'Begin Guided Session', style: this.vrSupported && !this.xr.presenting ? 'normal' : 'primary' }] });
+    const lastItq = this.itqHistory[0];
+    const itqDue = !lastItq || Date.now() - Date.parse(lastItq.startedAt) > 28 * 24 * 3600_000;
+    blocks.push({
+      kind: 'buttons', columns: 2, height: 66, items: [
+        { id: 'menu:resource', label: 'Resource & Stabilization' },
+        { id: 'menu:itq', label: lastItq ? `Monthly questionnaire${itqDue ? ' · due' : ''}` : 'Monthly questionnaire (ITQ)' },
+      ],
+    });
     blocks.push({
       kind: 'buttons', columns: 2, height: 62, items: [
         { id: 'menu:sanctuary', label: 'Grounding Sanctuary' },
@@ -406,6 +417,8 @@ export class App {
   private async menuAction(a: string): Promise<void> {
     switch (a) {
       case 'guided': return this.startSession(GUIDED_SESSION);
+      case 'resource': return this.startSession(RESOURCE_SESSION);
+      case 'itq': return this.startSession(ITQ_SESSION);
       case 'followup':
         if (this.menuFollowUp) return this.startSession(FOLLOW_UP, this.menuFollowUp.session, this.menuFollowUp.fu);
         return;
@@ -441,6 +454,7 @@ export class App {
     const engine = new SessionEngine(def);
     if (parent) engine.answers.parentDate = fmtDate(parent.startedAt);
     if (fu) engine.answers.followUpKind = fu.kind;
+    if (def.id === GUIDED_SESSION.id) engine.answers.processingStyle = this.settings.get().processingStyle;
     this.record = {
       id: uid('ses'),
       definitionId: def.id,
@@ -456,6 +470,10 @@ export class App {
       stimLocked: false,
     };
     this.engine = engine;
+    if (def.id === ITQ_SESSION.id) {
+      this.itqHistory = (await this.journal.list().catch(() => [] as SessionRecord[]))
+        .filter((r) => r.definitionId === ITQ_SESSION.id && r.status === 'completed');
+    }
     this.voice.clear();
     this.paused = false;
     this.grounding.uses = 0;
@@ -495,6 +513,7 @@ export class App {
 
   private startSet(step: StepDef): void {
     const s = this.settings.snapshot();
+    if (step.stim?.speed) s.speed = step.stim.speed;
     const duration = step.stim?.duration ?? s.setDuration;
     this.stimContext = 'session';
     this.paused = false;
@@ -526,9 +545,10 @@ export class App {
     const blocks: Block[] = [];
     const seen = new Set<string>();
     for (const n of step.notes ?? []) {
-      if (e.evaluate(n.when) && !seen.has(n.text)) {
-        seen.add(n.text);
-        blocks.push({ kind: 'note', text: n.text, tone: n.tone });
+      const text = e.template(n.text);
+      if (e.evaluate(n.when) && !seen.has(text)) {
+        seen.add(text);
+        blocks.push({ kind: 'note', text, tone: n.tone });
       }
     }
     for (const inp of e.visibleInputs()) {
@@ -572,6 +592,55 @@ export class App {
   }
 
   private summaryBlocks(): Block[] {
+    const id = this.engine!.def.id;
+    if (id === ITQ_SESSION.id) return this.itqBlocks();
+    if (id === RESOURCE_SESSION.id) return this.resourceBlocks();
+    return this.guidedSummaryBlocks();
+  }
+
+  private itqBlocks(): Block[] {
+    const r: ItqResult = scoreItq(this.engine!.answers);
+    const lines = [
+      `PTSD symptoms: ${r.ptsdTotal} / 24  (re-experiencing ${r.clusters.Re}, avoidance ${r.clusters.Av}, sense of threat ${r.clusters.Th})`,
+      `Self-organisation difficulties: ${r.dsoTotal} / 24  (emotion regulation ${r.clusters.AD}, self-concept ${r.clusters.NSC}, relationships ${r.clusters.DR})`,
+    ];
+    const screenText: Record<ItqResult['screen'], string> = {
+      none: 'Screening result: below the threshold for probable PTSD or complex PTSD.',
+      PTSD: 'Screening result: consistent with probable PTSD (ICD-11).',
+      CPTSD: 'Screening result: consistent with probable complex PTSD (ICD-11).',
+      incomplete: 'Some questions were skipped, so no screening result is given. The totals above count skipped items as 0.',
+    };
+    lines.push(screenText[r.screen]);
+    const prev = this.itqHistory.slice(0, 5).map((h) => {
+      const p = scoreItq(h.answers);
+      return `${fmtDate(h.startedAt)} — PTSD ${p.ptsdTotal}, self-organisation ${p.dsoTotal}`;
+    });
+    const blocks: Block[] = [{ kind: 'lines', lines }];
+    if (prev.length) blocks.push({ kind: 'lines', size: 22, lines: ['Previous results:', ...prev] });
+    blocks.push({
+      kind: 'note',
+      text: 'This is a self-report screen, not a diagnosis. Scores move for many reasons, so look at the trend over months rather than any single result. If the scores are high or rising, that is worth talking through with a trauma-informed clinician.',
+    });
+    return blocks;
+  }
+
+  private resourceBlocks(): Block[] {
+    const e = this.engine!;
+    const a = e.answers;
+    const kind: Record<string, string> = { place: 'Calm or safe place', presence: 'Caring presence', mastery: 'Time I felt capable', quality: 'A quality', nature: 'Nature, music, or art' };
+    const strengths = Object.keys(a).filter((k) => /^res_strength_\d+$/.test(k)).sort((x, y) => Number(x.split('_')[2]) - Number(y.split('_')[2])).map((k) => a[k]);
+    const lines = [
+      `Resource: ${kind[String(a.resourceType)] ?? '–'}`,
+      `Short sets: ${e.setCount}`,
+    ];
+    if (strengths.length) lines.push(`Positive feeling: ${strengths.join(' → ')} (0–10)`);
+    if (a.res_cue) lines.push(`Cue word: "${String(a.res_cue)}"`);
+    const negatives = Object.keys(a).filter((k) => k.startsWith('res_check_') && a[k] === 'negative').length;
+    if (negatives) lines.push(`Set aside ${negatives} resource${negatives > 1 ? 's' : ''} that turned upsetting.`);
+    return [{ kind: 'lines', lines }];
+  }
+
+  private guidedSummaryBlocks(): Block[] {
     const e = this.engine!;
     const rec = this.record!;
     const a = e.answers;
@@ -649,9 +718,11 @@ export class App {
   private choose(field: string, value: string): void {
     const e = this.engine;
     if (!e) return;
-    e.setAnswer(field, value);
-    void this.autosave();
     const inp = e.visibleInputs().find((i) => e.resolveField(i.field) === field);
+    const numeric = inp?.kind === 'choice' && inp.numeric;
+    e.setAnswer(field, numeric ? Number(value) : value);
+    if (numeric && this.record) this.record.ratings.push({ field, value: Number(value), stepId: e.current.id, at: now() });
+    void this.autosave();
     if (inp?.kind === 'choice' && inp.autoAdvance) e.advance();
     else this.render();
   }
@@ -712,7 +783,7 @@ export class App {
 
   private async abandonSession(): Promise<void> {
     const rec = this.record;
-    const hasData = rec && (Object.keys(rec.answers).some((k) => k !== 'parentDate' && k !== 'followUpKind') || rec.sets.length > 0 || this.voice.size > 0);
+    const hasData = rec && (Object.keys(rec.answers).some((k) => !['parentDate', 'followUpKind', 'processingStyle'].includes(k)) || rec.sets.length > 0 || this.voice.size > 0);
     if (rec && !hasData) {
       await this.journal.deleteSession(rec.id).catch(() => undefined);
       this.clearSession();
@@ -849,13 +920,14 @@ export class App {
 
   private groundingView(): PanelView {
     const inSession = !!this.engine;
-    const guided = this.engine?.def.id === GUIDED_SESSION.id;
-    const atClosing = ['closure', 'summary', 'body_end'].includes(this.engine?.current.id ?? '');
+    const closing = this.engine?.def.closingStep;
+    const cur = this.engine?.current;
+    const atClosing = !closing || cur?.id === closing || cur?.type === 'summary' || cur?.id === 'body_end';
     const items: Btn[] = inSession
       ? [
         { id: 'g:return', label: 'Return to session', style: 'primary' },
         { id: 'g:orient', label: 'Orientation guide' },
-        ...(guided && !atClosing ? [{ id: 'g:closing', label: 'Go to closing' }] : []),
+        ...(!atClosing ? [{ id: 'g:closing', label: 'Go to closing' }] : []),
         { id: 'g:exitvr', label: 'Exit VR', style: this.xr.presenting ? 'normal' : 'disabled' } as Btn,
         { id: 'g:end', label: 'End session', style: 'danger' },
       ]
@@ -898,7 +970,7 @@ export class App {
       case 'closing':
         this.grounding.release();
         this.screen = { name: 'session' };
-        this.engine?.enter('closure');
+        if (this.engine?.def.closingStep) this.engine.enter(this.engine.def.closingStep);
         return;
       case 'exitvr':
         return this.xr.exitVR();
@@ -920,10 +992,11 @@ export class App {
   }
 
   private endConfirmView(): PanelView {
-    const guided = this.engine?.def.id === GUIDED_SESSION.id;
-    const atClosing = ['closure', 'summary'].includes(this.engine?.current.id ?? '');
+    const closing = this.engine?.def.closingStep;
+    const cur = this.engine?.current;
+    const offerClosing = !!closing && cur?.id !== closing && cur?.type !== 'summary' && this.engine?.def.id !== ITQ_SESSION.id;
     const items: Btn[] = [
-      ...(guided && !atClosing ? [{ id: 'end:closing', label: 'Brief closing first', style: 'primary' } as Btn] : []),
+      ...(offerClosing ? [{ id: 'end:closing', label: 'Brief closing first', style: 'primary' } as Btn] : []),
       { id: 'end:now', label: 'End now', style: 'danger' },
       { id: 'end:back', label: 'Go back' },
     ];
@@ -941,7 +1014,7 @@ export class App {
     if (a === 'closing') {
       this.stim.stop('ended-to-closing');
       this.screen = { name: 'session' };
-      this.engine?.enter('closure');
+      if (this.engine?.def.closingStep) this.engine.enter(this.engine.def.closingStep);
     }
   }
 
@@ -1143,8 +1216,12 @@ export class App {
     const r = d.rec;
     const a = r.answers;
     const lines: string[] = [
-      `${fmtDate(r.startedAt)} · ${r.definitionId === FOLLOW_UP.id ? 'Follow-up' : 'Guided session'} · ${r.status}`,
+      `${fmtDate(r.startedAt)} · ${({ [FOLLOW_UP.id]: 'Follow-up', [ITQ_SESSION.id]: 'Monthly questionnaire', [RESOURCE_SESSION.id]: 'Resource session' } as Record<string, string>)[r.definitionId] ?? 'Guided session'} · ${r.status}`,
     ];
+    if (r.definitionId === ITQ_SESSION.id) {
+      const q = scoreItq(a);
+      lines.push(`PTSD symptoms ${q.ptsdTotal}/24 · self-organisation ${q.dsoTotal}/24 · screen: ${q.screen}`);
+    }
     if (a.entryPoint) lines.push(`Starting point: ${ENTRY_LABEL[String(a.entryPoint)] ?? a.entryPoint}`);
     for (const [k, label] of [['emotions', 'Feelings'], ['negBelief', 'Belief'], ['posBelief', 'Preferred belief'], ['situation_text', 'Notes'], ['fu_aftereffects', 'Aftereffects']] as const) {
       const v = a[k];
@@ -1152,7 +1229,7 @@ export class App {
     }
     const ratings = r.ratings.map((x) => `${x.field}=${x.value}`).join('  ');
     if (ratings) lines.push(`Ratings: ${ratings}`);
-    const sets = (r.sets as StimLog[]).filter((s) => s.mode === 'stim');
+    const sets = (r.sets as StimLog[]).filter((s) => s.mode === 'stim' || s.mode === 'res_stim');
     if (sets.length) lines.push(`Sets: ${sets.map((s) => `${s.actualDuration.toFixed(0)}s${s.completed ? '' : '*'}`).join(', ')}  (* stopped early)`);
     const g = r.events.filter((e) => e.type === 'grounding').length;
     if (g) lines.push(`Grounding used ${g}×`);
@@ -1195,11 +1272,16 @@ function fmtDate(iso: string): string {
 }
 
 function sessionLabel(s: SessionRecord): string {
-  const type = s.definitionId === FOLLOW_UP.id ? 'Follow-up' : 'Guided';
-  const sets = (s.sets as { mode?: string }[]).filter((x) => x.mode === 'stim').length;
+  const type = s.definitionId === FOLLOW_UP.id ? 'Follow-up' : s.definitionId === ITQ_SESSION.id ? 'Questionnaire'
+    : s.definitionId === RESOURCE_SESSION.id ? 'Resource' : 'Guided';
+  if (type === 'Questionnaire') {
+    const r = scoreItq(s.answers);
+    return `${fmtDate(s.startedAt)} · ITQ · PTSD ${r.ptsdTotal}, self-org ${r.dsoTotal}${s.status === 'completed' ? '' : ' · unfinished'}`;
+  }
+  const sets = (s.sets as { mode?: string }[]).filter((x) => x.mode === 'stim' || x.mode === 'res_stim').length;
   const a = s.answers;
   const sud = a.sud_0 !== undefined || a.sud_end !== undefined ? ` · distress ${a.sud_0 ?? '–'}→${a.sud_end ?? '–'}` : '';
   const status = s.status === 'completed' ? '' : s.status === 'in-progress' ? ' · interrupted' : ' · ended early';
-  return `${fmtDate(s.startedAt)} · ${type}${type === 'Guided' ? ` · ${sets} set${sets === 1 ? '' : 's'}` : ''}${sud}${status}`;
+  return `${fmtDate(s.startedAt)} · ${type}${type === 'Guided' || type === 'Resource' ? ` · ${sets} set${sets === 1 ? '' : 's'}` : ''}${sud}${status}`;
 }
 

@@ -64,6 +64,7 @@ export class SessionEngine {
       const v = this.answers[this.resolveField(c.field)];
       if (c.in && !c.in.includes(String(v))) return false;
       if (c.gte !== undefined && !(typeof v === 'number' && v >= c.gte)) return false;
+      if (c.lte !== undefined && !(typeof v === 'number' && v <= c.lte)) return false;
     }
     if (c.setCountGte !== undefined && this.setCount < c.setCountGte) return false;
     return true;
@@ -172,6 +173,7 @@ export function validateDefinition(def: SessionDefinition): string[] {
   };
   ref('start', def.start);
   ref('stimLockedFallback', def.stimLockedFallback);
+  ref('closingStep', def.closingStep);
   for (const s of def.steps) {
     ref(`${s.id}.next`, s.next);
     if (s.when && !s.next) errs.push(`${s.id} has when but no next`);

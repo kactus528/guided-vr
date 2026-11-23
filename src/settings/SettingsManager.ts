@@ -26,6 +26,8 @@ export interface Settings {
   subtitles: boolean;
   // View
   viewMode: ViewMode;
+  // Processing
+  processingStyle: 'restricted' | 'open';
 }
 
 /**
@@ -52,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   narrationVolume: 0.9,
   subtitles: true,
   viewMode: 'seated',
+  processingStyle: 'restricted',
 };
 
 export const COLORS: { value: string; label: string }[] = [
@@ -99,6 +102,12 @@ export const SETTING_ROWS: SettingRow[] = [
     key: 'viewMode', label: 'Position', kind: 'enum', options: [
       { value: 'seated', label: 'Seated' },
       { value: 'reclining', label: 'Reclining' },
+    ],
+  },
+  {
+    key: 'processingStyle', label: 'Processing style', kind: 'enum', options: [
+      { value: 'restricted', label: 'Focused (recommended)' },
+      { value: 'open', label: 'Open' },
     ],
   },
 ];
