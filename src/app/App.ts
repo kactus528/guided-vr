@@ -1281,8 +1281,8 @@ export class App {
       if (c.stt === 'local') {
         const L = this.stt.local;
         blocks.push({ kind: 'choice', field: 'cfg:localModel', label: 'Speech model', selected: c.localModel, options: LOCAL_MODELS.map((m) => ({ value: m.id, label: m.label })) });
-        const st = L.status === 'ready' ? 'Speech model ready.'
-          : L.status === 'downloading' ? `Downloading speech model… ${Math.round(L.progress * 100)}%`
+        const st = L.status === 'ready' ? `Speech model ready${L.strategy ? ` (${L.strategy})` : ''}.`
+          : L.status === 'downloading' ? `Downloading speech model… ${Math.round(L.progress * 100)}%${L.retries.length ? ` — trying another method (${L.retries.length} didn't work on this device)` : ''}`
             : L.status === 'error' ? `Speech model error: ${L.error}`
               : 'Speech model not downloaded yet. It downloads once (from Hugging Face) and is then stored on the headset.';
         blocks.push({ kind: 'note', tone: L.status === 'error' ? 'warn' : 'info', text: `${st} Your voice is transcribed on the headset and never sent anywhere. Each reply takes a few seconds to transcribe on a Quest 2.` });

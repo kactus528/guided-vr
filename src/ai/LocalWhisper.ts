@@ -5,10 +5,30 @@
  * browser. Audio never leaves the device.
  */
 
-/** Self-contained CDN build (the package's "jsdelivr" entry), then jsDelivr's ESM-rewritten build as a fallback. */
-export const TRANSFORMERS_URLS = [
-  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js',
-  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm',
+/**
+ * Load strategies, tried in order until one creates a working session:
+ *  1. Transformers.js 3.8.1 (stable onnxruntime) with 8-bit weights
+ *  2. 4.2.0 with 8-bit weights and only basic graph optimisation (avoids a QDQ fusion
+ *     that fails on these weights: "TransposeDQWeightsForMatMulNBits Missing required scale")
+ *  3. 4.2.0 with a full-precision decoder (bigger download, no quantised decoder at all)
+ * Each strategy lists library URLs: the package's self-contained build, then jsDelivr's /+esm build.
+ */
+export const LOAD_STRATEGIES = [
+  {
+    name: '3.8.1 · 8-bit',
+    libs: ['https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1', 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm'],
+    options: { dtype: 'q8' },
+  },
+  {
+    name: '4.2.0 · 8-bit, basic optimisation',
+    libs: ['https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js', 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm'],
+    options: { dtype: 'q8', session_options: { graphOptimizationLevel: 'basic' } },
+  },
+  {
+    name: '4.2.0 · full-precision decoder',
+    libs: ['https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js', 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm'],
+    options: { dtype: { encoder_model: 'q8', decoder_model_merged: 'fp32' } },
+  },
 ];
 
 export const LOCAL_MODELS = [
@@ -31,23 +51,35 @@ async function importLib(libs) {
   }
   throw new Error('Could not load the speech library. ' + errors.join(' | '));
 }
-async function load(model, libs) {
-  const { pipeline, env } = await importLib(libs);
-  env.allowLocalModels = false;
-  const files = {};
-  pipe = await pipeline('automatic-speech-recognition', model, {
-    dtype: 'q8',
-    device: 'wasm',
-    progress_callback: (p) => {
-      if (p && p.file && typeof p.loaded === 'number' && typeof p.total === 'number' && p.total > 0) {
-        files[p.file] = [p.loaded, p.total];
-        let l = 0, t = 0;
-        for (const k in files) { l += files[k][0]; t += files[k][1]; }
-        postMessage({ type: 'progress', loaded: l, total: t });
-      }
-    },
-  });
-  loadedModel = model;
+let usedStrategy = null;
+async function load(model, strategies) {
+  const failures = [];
+  for (const st of strategies) {
+    try {
+      const { pipeline, env } = await importLib(st.libs);
+      env.allowLocalModels = false;
+      const files = {};
+      pipe = await pipeline('automatic-speech-recognition', model, {
+        ...st.options,
+        device: 'wasm',
+        progress_callback: (p) => {
+          if (p && p.file && typeof p.loaded === 'number' && typeof p.total === 'number' && p.total > 0) {
+            files[p.file] = [p.loaded, p.total];
+            let l = 0, t = 0;
+            for (const k in files) { l += files[k][0]; t += files[k][1]; }
+            postMessage({ type: 'progress', loaded: l, total: t, strategy: st.name });
+          }
+        },
+      });
+      loadedModel = model;
+      usedStrategy = st.name;
+      return;
+    } catch (e) {
+      failures.push(st.name + ': ' + String((e && e.message) || e).slice(0, 160));
+      postMessage({ type: 'retry', failed: st.name });
+    }
+  }
+  throw new Error('No load method worked. ' + failures.join(' || '));
 }
 function ensure(model, lib) {
   if (!loading || loadedModel && loadedModel !== model) loading = load(model, lib);
@@ -57,10 +89,10 @@ onmessage = async (e) => {
   const m = e.data;
   try {
     await ensure(m.model, m.lib);
-    if (m.type === 'load') postMessage({ type: 'ready', id: m.id });
+    if (m.type === 'load') postMessage({ type: 'ready', id: m.id, strategy: usedStrategy });
     if (m.type === 'transcribe') {
       const out = await pipe(m.audio, { chunk_length_s: 30 });
-      postMessage({ type: 'result', id: m.id, text: Array.isArray(out) ? out.map((o) => o.text).join(' ') : out.text });
+      postMessage({ type: 'result', id: m.id, strategy: usedStrategy, text: Array.isArray(out) ? out.map((o) => o.text).join(' ') : out.text });
     }
   } catch (err) {
     loading = null;
@@ -74,12 +106,16 @@ export class LocalWhisper {
   status: LocalStatus = 'idle';
   progress = 0; // 0..1
   error: string | null = null;
+  /** Load methods that failed before one worked (shown in the UI). */
+  retries: string[] = [];
   onStatus: () => void = () => {};
   private worker: Worker | null = null;
   private seq = 0;
   private pending = new Map<number, { resolve: (t: string) => void; reject: (e: Error) => void }>();
 
-  constructor(private getModel: () => string, private libs: string[] = TRANSFORMERS_URLS) {}
+  strategy: string | null = null;
+
+  constructor(private getModel: () => string, private strategies = LOAD_STRATEGIES) {}
 
   static supported(): boolean {
     return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined' && typeof OfflineAudioContext !== 'undefined';
@@ -90,7 +126,14 @@ export class LocalWhisper {
     const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' }));
     const w = new Worker(url, { type: 'module' });
     w.onmessage = (e: MessageEvent) => {
-      const m = e.data as { type: string; id?: number; text?: string; message?: string; loaded?: number; total?: number };
+      const m = e.data as { type: string; id?: number; text?: string; message?: string; loaded?: number; total?: number; strategy?: string; failed?: string };
+      if (m.type === 'retry') {
+        this.retries.push(m.failed ?? '');
+        this.progress = 0;
+        this.onStatus();
+        return;
+      }
+      if (m.strategy) this.strategy = m.strategy;
       if (m.type === 'progress' && m.total) {
         if (this.status !== 'ready') this.status = 'downloading';
         this.progress = (m.loaded ?? 0) / m.total;
@@ -134,7 +177,7 @@ export class LocalWhisper {
     }
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      const msg = { type, id, model: this.getModel(), lib: this.libs, audio };
+      const msg = { type, id, model: this.getModel(), lib: this.strategies, audio };
       if (audio) w.postMessage(msg, [audio.buffer]);
       else w.postMessage(msg);
     });
