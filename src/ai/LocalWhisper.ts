@@ -5,7 +5,11 @@
  * browser. Audio never leaves the device.
  */
 
-export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.web.min.js';
+/** Self-contained CDN build (the package's "jsdelivr" entry), then jsDelivr's ESM-rewritten build as a fallback. */
+export const TRANSFORMERS_URLS = [
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js',
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm',
+];
 
 export const LOCAL_MODELS = [
   { id: 'Xenova/whisper-tiny.en', label: 'Tiny (≈40 MB, fastest)' },
@@ -14,8 +18,21 @@ export const LOCAL_MODELS = [
 
 const WORKER_SRC = `
 let pipe = null, loading = null, loadedModel = null;
-async function load(model, lib) {
-  const { pipeline, env } = await import(lib);
+async function importLib(libs) {
+  const errors = [];
+  for (const url of libs) {
+    try {
+      const mod = await import(url);
+      if (mod && mod.pipeline) return mod;
+      errors.push(url + ': no pipeline export');
+    } catch (e) {
+      errors.push(url.split('/').slice(-2).join('/') + ': ' + ((e && e.message) || e));
+    }
+  }
+  throw new Error('Could not load the speech library. ' + errors.join(' | '));
+}
+async function load(model, libs) {
+  const { pipeline, env } = await importLib(libs);
   env.allowLocalModels = false;
   const files = {};
   pipe = await pipeline('automatic-speech-recognition', model, {
@@ -62,7 +79,7 @@ export class LocalWhisper {
   private seq = 0;
   private pending = new Map<number, { resolve: (t: string) => void; reject: (e: Error) => void }>();
 
-  constructor(private getModel: () => string, private lib = TRANSFORMERS_URL) {}
+  constructor(private getModel: () => string, private libs: string[] = TRANSFORMERS_URLS) {}
 
   static supported(): boolean {
     return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined' && typeof OfflineAudioContext !== 'undefined';
@@ -117,7 +134,7 @@ export class LocalWhisper {
     }
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      const msg = { type, id, model: this.getModel(), lib: this.lib, audio };
+      const msg = { type, id, model: this.getModel(), lib: this.libs, audio };
       if (audio) w.postMessage(msg, [audio.buffer]);
       else w.postMessage(msg);
     });
