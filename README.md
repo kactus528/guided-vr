@@ -6,8 +6,10 @@ It is **not** a clinically validated EMDR treatment, and it doesn't diagnose or 
 ## Run it
 
 **Option A: the live build.** https://kactus528.github.io/guided-vr/ — open it in the Quest browser and press **Enter VR**.
-`docs/` is the prebuilt static site GitHub Pages serves (Settings → Pages → `main` / `/docs`). It loads Three.js 0.170 from unpkg via an import map.
+`docs/` is the prebuilt static site GitHub Pages serves (Settings → Pages → `main` / `/docs`). Three.js 0.170 is hosted alongside it (no CDN).
 After changing source, run `npm run build:docs` to refresh it.
+
+In the browser you get a full 2D interface (like the Ganzflicker app): run sessions on the page, type answers directly, and press **Enter VR** whenever you like. Inside VR the same screens appear as floating panels. Allow the microphone from the main menu *before* entering VR — the Quest can only show that prompt outside VR.
 After the first online load, the service worker caches the app (including Three.js) so it works offline.
 
 **Option B: build from source** (bundles Three.js locally, no CDN):

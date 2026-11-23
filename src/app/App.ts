@@ -13,6 +13,7 @@ import { AudioStimulusController } from '../stim/AudioStimulusController.js';
 import { BilateralStimulationEngine, type StimLog } from '../stim/BilateralStimulationEngine.js';
 import { HapticStimulusController } from '../stim/HapticStimulusController.js';
 import { VisualStimulusController } from '../stim/VisualStimulusController.js';
+import { DomUI } from '../ui/DomUI.js';
 import { fmtSecs, Panel, type Block, type Btn, type PanelView } from '../ui/Panel.js';
 import { XRExperienceManager } from '../xr/XRExperienceManager.js';
 
@@ -79,10 +80,13 @@ export class App {
   private playing: HTMLAudioElement | null = null;
   private vrSupported = false;
   private persistRequested = false;
-  private textField: string | null = null;
+  private dom: DomUI;
+  private micGranted = false;
+  private textSaveTimer: number | null = null;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, uiRoot: HTMLElement) {
     this.xr = new XRExperienceManager(root);
+    this.dom = new DomUI(uiRoot);
     this.haptics = new HapticStimulusController(() => this.xr.inputSources());
     this.stim = new BilateralStimulationEngine(this.visual, () => this.audio(), this.haptics);
     this.narration = new NarrationManager(
@@ -136,8 +140,10 @@ export class App {
 
     this.setupHud();
     this.vrSupported = await XRExperienceManager.vrSupported();
+    await this.checkMic();
     this.updateHud();
     await this.showMenu();
+    (window as unknown as { __gvrReady: boolean }).__gvrReady = true;
   }
 
   private audio(): AudioStimulusController | null {
@@ -150,23 +156,24 @@ export class App {
 
   // ================= DOM HUD (desktop) =================
 
-  private $(id: string): HTMLElement {
-    return document.getElementById(id)!;
-  }
-
   private setupHud(): void {
-    this.$('btnVR').addEventListener('click', async () => {
+    this.dom.onAction = (id) => this.handle(id);
+    this.dom.onText = (field, value) => {
+      if (!this.engine) return;
+      this.engine.setAnswer(field, value.trim() ? value : undefined);
+      if (this.textSaveTimer) clearTimeout(this.textSaveTimer);
+      this.textSaveTimer = window.setTimeout(() => void this.autosave(), 600);
+    };
+    this.dom.onTopbar = (cmd) => {
       unlockAudio();
-      try {
-        await this.xr.enterVR();
-      } catch (e) {
-        this.toast(`Could not start VR: ${(e as Error).message}`);
-      }
-    });
-    this.$('btnGround').addEventListener('click', () => this.groundNow());
-    this.$('btnRecenter').addEventListener('click', () => this.xr.recenter());
+      if (cmd === 'vr') void this.enterVR();
+      else if (cmd === 'ground') this.groundNow();
+      else if (cmd === 'home' && !this.engine) void this.showMenu();
+      else if (cmd === 'home') this.toast('A session is in progress — use End to leave it.');
+    };
     window.addEventListener('keydown', (e) => {
-      if (this.textField) return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT') return;
       if (e.key === 'g' || e.key === 'G' || e.key === 'Escape') this.groundNow();
       else if (e.key === 'r' || e.key === 'R') this.xr.recenter();
       else if (e.key === ' ' && this.screen.name === 'session') {
@@ -174,45 +181,63 @@ export class App {
         this.togglePause();
       }
     });
-    this.$('textSave').addEventListener('click', () => this.closeTextEditor(true));
-    this.$('textCancel').addEventListener('click', () => this.closeTextEditor(false));
+  }
+
+  private async enterVR(): Promise<void> {
+    unlockAudio();
+    try {
+      await this.xr.enterVR();
+    } catch (e) {
+      this.toast(`Could not start VR: ${(e as Error).message}`);
+    }
+  }
+
+  private async checkMic(): Promise<void> {
+    try {
+      const st = await navigator.permissions?.query({ name: 'microphone' as PermissionName });
+      this.micGranted = st?.state === 'granted';
+      if (st) st.onchange = () => {
+        this.micGranted = st.state === 'granted';
+        this.render();
+      };
+    } catch {
+      this.micGranted = false;
+    }
+  }
+
+  /** The headset can only show the microphone prompt outside VR, so offer it up front. */
+  private async allowMic(): Promise<void> {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+      this.micGranted = true;
+      this.micDenied = false;
+      this.toast('Microphone allowed. Recordings stay on this device.');
+    } catch {
+      this.micDenied = true;
+      this.toast('Microphone not allowed — you can still type or skip.');
+    }
+    this.render();
   }
 
   private updateHud(): void {
-    const vr = this.$('btnVR') as HTMLButtonElement;
-    vr.style.display = this.vrSupported && !this.xr.presenting ? '' : 'none';
-    this.$('hud').classList.toggle('presenting', this.xr.presenting);
-    this.$('recIndicator').style.display = this.recorder.recording ? '' : 'none';
-    this.$('noVR').style.display = this.vrSupported ? 'none' : '';
+    this.dom.setTopbar({
+      vrAvailable: this.vrSupported,
+      presenting: this.xr.presenting,
+      recording: this.recorder.recording,
+      micNeeded: MicrophoneRecorder.supported() && !this.micGranted,
+    });
   }
 
   private toast(msg: string): void {
-    const t = this.$('toast');
+    const t = document.getElementById('toast')!;
     t.textContent = msg;
     t.style.opacity = '1';
     setTimeout(() => (t.style.opacity = '0'), 4000);
   }
 
-  private openTextEditor(field: string, label: string): void {
-    if (this.xr.presenting) {
-      this.transientNote = "Typing isn't available inside VR. Use voice, the options, or skip — or type later from the desktop view.";
-      this.render();
-      return;
-    }
-    this.textField = field;
-    this.$('textLabel').textContent = label;
-    (this.$('textArea') as HTMLTextAreaElement).value = String(this.engine?.getAnswer(field) ?? '');
-    this.$('textModal').style.display = 'flex';
-    (this.$('textArea') as HTMLTextAreaElement).focus();
-  }
-
-  private closeTextEditor(save: boolean): void {
-    if (save && this.textField && this.engine) {
-      this.engine.setAnswer(this.textField, (this.$('textArea') as HTMLTextAreaElement).value.trim());
-      void this.autosave();
-    }
-    this.textField = null;
-    this.$('textModal').style.display = 'none';
+  private textNoteInVR(): void {
+    this.transientNote = "Typing isn't available inside VR. Use voice, the options, or skip — or type later in the browser view.";
     this.render();
   }
 
@@ -225,7 +250,7 @@ export class App {
       case 'chip': return this.toggleChip(a, b);
       case 'choice': return this.choose(a, b);
       case 'rate': return this.rate(a, b);
-      case 'text': return this.openTextEditor(a, this.inputLabel(a));
+      case 'text': return this.textNoteInVR();
       case 'voice': return void this.voiceCmd(a, b);
       case 'set': {
         this.settings.adjust(a as keyof Settings, b === 'inc' ? 1 : -1);
@@ -279,11 +304,15 @@ export class App {
   // ================= Render =================
 
   private render(): void {
-    const stimShowing = this.stim.running;
-    this.panel.mesh.visible = !stimShowing;
-    this.stimPanel.mesh.visible = stimShowing;
-    if (stimShowing) {
-      this.stimPanel.setView(this.stimView());
+    const stim = this.stim.running;
+    const vr = this.xr.presenting;
+    this.panel.mesh.visible = vr && !stim;
+    this.stimPanel.mesh.visible = vr && stim;
+    this.updateHud();
+    if (stim) {
+      const sv = this.stimView();
+      if (vr) this.stimPanel.setView(sv);
+      this.dom.showStim(sv);
       return;
     }
     let v: PanelView;
@@ -302,7 +331,9 @@ export class App {
     v.subtitle = this.subtitle;
     v.recording = this.recorder.recording;
     if (this.transientNote) v.blocks.unshift({ kind: 'note', text: this.transientNote, tone: 'warn' });
-    this.panel.setView(v);
+    if (vr) this.panel.setView(v);
+    const key = `${this.screen.name}:${this.screen.name === 'session' ? this.engine?.current.id : ''}:${this.paused}`;
+    this.dom.showPage(v, key);
   }
 
   private stimView(): PanelView {
@@ -343,7 +374,19 @@ export class App {
       blocks.push({ kind: 'note', text: `A ${this.menuFollowUp.fu.kind === '24h' ? '24-hour' : '7-day'} follow-up check-in is available for your session on ${fmtDate(this.menuFollowUp.session.startedAt)}.` });
       blocks.push({ kind: 'buttons', columns: 1, height: 64, items: [{ id: 'menu:followup', label: 'Start follow-up check-in' }] });
     }
-    blocks.push({ kind: 'buttons', columns: 1, height: 96, items: [{ id: 'menu:guided', label: 'Begin Guided Session', style: 'primary' }] });
+    if (!this.xr.presenting) {
+      const hero: Btn[] = [];
+      if (this.vrSupported) hero.push({ id: 'menu:vr', label: 'Enter VR', style: 'primary' });
+      if (MicrophoneRecorder.supported() && !this.micGranted) hero.push({ id: 'menu:mic', label: 'Allow microphone' });
+      blocks.push({
+        kind: 'note',
+        text: this.vrSupported
+          ? 'Best in the headset. Everything also works here in the browser. Allow the microphone first if you want voice notes — the headset can only ask outside VR.'
+          : 'Running in the browser. Open this page in the Quest browser to use it in VR.',
+      });
+      if (hero.length) blocks.push({ kind: 'buttons', columns: 2, height: 80, items: hero });
+    }
+    blocks.push({ kind: 'buttons', columns: 1, height: 96, items: [{ id: 'menu:guided', label: 'Begin Guided Session', style: this.vrSupported && !this.xr.presenting ? 'normal' : 'primary' }] });
     blocks.push({
       kind: 'buttons', columns: 2, height: 62, items: [
         { id: 'menu:sanctuary', label: 'Grounding Sanctuary' },
@@ -380,6 +423,10 @@ export class App {
         return this.render();
       case 'back':
         return this.showMenu();
+      case 'vr':
+        return this.enterVR();
+      case 'mic':
+        return this.allowMic();
     }
   }
 
@@ -622,12 +669,6 @@ export class App {
     this.render();
   }
 
-  private inputLabel(field: string): string {
-    const e = this.engine;
-    const step = e?.current;
-    return step ? `${e!.template(step.title)} — ${e!.bodyFor(step) || 'type your response'}` : 'Your response';
-  }
-
   private togglePause(): void {
     if (this.screen.name !== 'session') return;
     this.paused = !this.paused;
@@ -730,10 +771,13 @@ export class App {
       try {
         this.recordingMeta = { field, stepId: this.engine.current.id, prompt: this.engine.template(this.engine.current.title) };
         await this.recorder.start();
+        this.micGranted = true;
         this.ticker = window.setInterval(() => this.render(), 500);
       } catch (err) {
         this.recordingMeta = null;
-        if ((err as Error).name === 'NotAllowedError') this.micDenied = true;
+        if ((err as Error).name === 'NotAllowedError' && this.xr.presenting && !this.micGranted) {
+          this.transientNote = 'The headset can only ask for the microphone outside VR. Exit VR, choose "Allow microphone" on the main menu, then come back — or skip for now.';
+        } else if ((err as Error).name === 'NotAllowedError') this.micDenied = true;
         else this.transientNote = `Microphone unavailable: ${(err as Error).message}`;
       }
       return this.render();

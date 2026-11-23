@@ -9,7 +9,7 @@
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "build:docs": "esbuild src/main.ts --bundle --format=esm --target=es2022 --external:three --define:import.meta.env.PROD=true --minify --sourcemap --outfile=docs/app.js"
+    "build:docs": "node scripts/build-docs.mjs"
   },
   "dependencies": {
     "three": "^0.170.0"

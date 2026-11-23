@@ -3,59 +3,131 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b0f1a" />
+  <meta name="theme-color" content="#0a0d14" />
   <title>Guided VR Emotional Reprocessing</title>
   <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" />
+  <script>
+    // Startup diagnostics: if the app fails to load, show why instead of a blank page.
+    (function () {
+      var errs = [];
+      function show() {
+        var b = document.getElementById('boot');
+        if (!b) return;
+        b.hidden = false;
+        b.querySelector('.msg').textContent = errs.length ? errs.join('\n') : 'The app is taking a long time to start.';
+      }
+      window.addEventListener('error', function (e) {
+        var t = e.target, src = t && t !== window && (t.src || t.href);
+        errs.push(src ? 'Failed to load ' + src
+          : (e.message || 'Error') + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : ''));
+        if (!window.__gvrReady) show();
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        errs.push(String(e.reason && e.reason.message || e.reason));
+        if (!window.__gvrReady) show();
+      });
+      setTimeout(function () { if (!window.__gvrReady) show(); }, 10000);
+    })();
+  </script>
   <style>
-    html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e9edf6; }
-    #app { position: fixed; inset: 0; }
-    #hud { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; align-items: center; pointer-events: none; }
-    #hud button { pointer-events: auto; background: #2a3350; color: #e9edf6; border: 1px solid #3c4a75; border-radius: 10px;
-      padding: 9px 14px; font-size: 15px; cursor: pointer; }
-    #hud button.primary { background: #4d7cff; border-color: #6b93ff; }
-    #hud .hint { margin-left: auto; font-size: 13px; color: #8a96b3; pointer-events: none; }
-    #hud.presenting .hint { display: none; }
-    #recIndicator { pointer-events: none; background: rgba(255,77,94,.18); border: 1px solid #ff4d5e; color: #ff9aa5;
-      border-radius: 10px; padding: 8px 12px; font-size: 14px; }
-    #recIndicator::before { content: ''; display: inline-block; width: 10px; height: 10px; background: #ff4d5e;
-      border-radius: 50%; margin-right: 8px; animation: blink 1.2s infinite; }
-    @keyframes blink { 50% { opacity: .3; } }
-    #noVR { font-size: 13px; color: #8a96b3; pointer-events: none; }
-    #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: rgba(20,24,40,.95);
-      border: 1px solid #3c4a75; padding: 10px 16px; border-radius: 10px; opacity: 0; transition: opacity .3s; pointer-events: none; }
-    #textModal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; }
-    #textModal .box { background: #121829; border: 1px solid #3c4a75; border-radius: 14px; padding: 20px; width: min(640px, 92vw); }
-    #textModal label { display: block; color: #9aa6c0; font-size: 14px; margin-bottom: 10px; line-height: 1.4; }
-    #textModal textarea { width: 100%; box-sizing: border-box; height: 160px; background: #0b0f1a; color: #e9edf6;
-      border: 1px solid #3c4a75; border-radius: 10px; padding: 12px; font: inherit; font-size: 16px; resize: vertical; }
-    #textModal .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
-    #textModal button { background: #2a3350; color: #e9edf6; border: 1px solid #3c4a75; border-radius: 10px; padding: 9px 16px; font-size: 15px; cursor: pointer; }
-    #textModal button.primary { background: #4d7cff; border-color: #6b93ff; }
+    [hidden] { display: none !important; }
+    :root {
+      --bg: #0a0d14; --panel: #121826; --panel2: #182033; --line: #263049;
+      --fg: #e8ecf4; --muted: #95a0b8; --accent: #8ab4ff; --accent-ink: #0b1226;
+      --warn: #ffb347; --good: #7ad7a0; --danger: #e07a88; --rec: #ff5a6a;
+      --display: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+      --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, monospace;
+      color-scheme: dark;
+    }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 17px; line-height: 1.5; }
+    #app { position: fixed; inset: 0; z-index: 0; }
+    #app canvas { display: block; }
+    #ui { position: relative; z-index: 1; pointer-events: none; min-height: 100vh; }
+    #ui > * { pointer-events: auto; }
+    .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 10px; max-width: 620px; margin: 0 auto;
+      padding: 10px 16px; background: rgba(10,13,20,.92); border-bottom: 1px solid var(--line); backdrop-filter: blur(6px); box-sizing: border-box; }
+    .topbar .spacer { flex: 1; }
+    .brand { font: inherit; font-family: var(--display); font-weight: 800; font-size: 1.15rem; background: none; border: 0; color: var(--fg); cursor: pointer; padding: 6px 2px; }
+    .brand span { color: var(--accent); }
+    .rec { color: var(--rec); font-size: .9rem; font-weight: 600; animation: blink 1.4s infinite; }
+    @keyframes blink { 50% { opacity: .45; } }
+    .page { max-width: 620px; margin: 0 auto; padding: 0 16px 8px; box-sizing: border-box; background: rgba(10,13,20,.9); min-height: calc(100vh - 62px); }
+    .screen { display: grid; gap: 20px; padding-top: 26px; align-content: start; }
+    .screen-head { display: grid; gap: 6px; }
+    .screen-head h2 { margin: 0; font-family: var(--display); font-weight: 800; font-size: clamp(1.7rem, 6vw, 2.2rem); line-height: 1.08; letter-spacing: -.01em; text-wrap: balance; }
+    .eyebrow { margin: 0; font-family: var(--mono); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+    .lede { margin: 0; color: var(--fg); opacity: .88; }
+    .bullets { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; }
+    .muted { color: var(--muted); margin: 0; font-size: .95rem; }
+    .lines p { margin: 0 0 4px; }
+    .note { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--panel); border-radius: 10px; padding: 12px 14px; font-size: .95rem; }
+    .note.warn { border-color: var(--warn); border-left-color: var(--warn); color: #ffe2b8; }
+    .row { display: grid; gap: 8px; }
+    .lbl { margin: 0; font-size: .8rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+    .presets { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip { font: inherit; font-size: .95rem; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 999px; padding: 9px 15px; cursor: pointer; }
+    .chip[aria-pressed=true] { border-color: var(--accent); color: var(--accent); background: rgba(138,180,255,.1); }
+    .options { display: grid; gap: 10px; }
+    .option { font: inherit; text-align: left; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; cursor: pointer; font-size: 1.05rem; }
+    .option:hover, .chip:hover, .cell:hover { border-color: var(--muted); }
+    .option[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+    .scale { display: grid; grid-template-columns: repeat(var(--n), 1fr); gap: 6px; }
+    .cell { font: inherit; font-family: var(--mono); font-size: 1rem; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 0; cursor: pointer; }
+    .cell[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+    .ends { display: flex; justify-content: space-between; font-size: .8rem; color: var(--muted); }
+    .linkbtn { font: inherit; font-size: .8rem; letter-spacing: 0; text-transform: none; color: var(--accent); background: none; border: 0; padding: 0 0 0 8px; cursor: pointer; text-decoration: underline; }
+    textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; width: 100%; box-sizing: border-box; resize: vertical; line-height: 1.4; }
+    textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .recbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .recnow { color: var(--rec); font-weight: 600; }
+    .btns { display: grid; gap: 10px; }
+    .btns.cols2 { grid-template-columns: 1fr 1fr; }
+    .go { font-family: var(--display); font-weight: 700; font-size: 1.1rem; border: 0; border-radius: 12px; padding: 16px; cursor: pointer; background: var(--accent); color: var(--accent-ink); }
+    .go.secondary { background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+    .go.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+    .go.small { font-size: .95rem; padding: 10px 16px; }
+    .go.rec.on { background: var(--rec); color: #fff; }
+    .go:disabled { opacity: .35; cursor: not-allowed; }
+    .go:focus-visible, .chip:focus-visible, .option:focus-visible, .cell:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+    .settings { display: grid; gap: 4px; }
+    .setrow { display: grid; grid-template-columns: 1fr 44px 150px 44px; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+    .setrow .lbl { font-size: .78rem; }
+    .setrow output { text-align: center; font-family: var(--mono); font-size: .92rem; }
+    .step { font: inherit; font-size: 1.3rem; width: 44px; height: 40px; border-radius: 10px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); cursor: pointer; }
+    .foot { position: sticky; bottom: 0; display: flex; gap: 8px; padding: 14px 0 calc(14px + env(safe-area-inset-bottom, 0px)); margin-top: 22px;
+      background: linear-gradient(to top, var(--bg) 70%, transparent); }
+    .foot .go { flex: 1; }
+    .caption { position: fixed; left: 50%; transform: translateX(-50%); bottom: 86px; z-index: 30; max-width: 560px; width: calc(100% - 48px);
+      background: rgba(0,0,0,.78); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: .95rem; color: #f3efe2; pointer-events: none; }
+    .stimbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 30; display: flex; gap: 8px; align-items: center;
+      background: rgba(10,13,20,.85); border: 1px solid var(--line); border-radius: 14px; padding: 8px; }
+    .stimlabel { padding: 0 10px; color: var(--muted); font-size: .9rem; }
+    #ui.stimming .topbar { opacity: .35; }
+    #ui.stimming .topbar:hover { opacity: 1; }
+    #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 40; background: rgba(18,24,38,.97); border: 1px solid var(--line);
+      padding: 10px 16px; border-radius: 10px; opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 90vw; }
+    #boot { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: var(--bg); padding: 24px; }
+    #boot .box { max-width: 560px; border: 1px solid var(--warn); border-radius: 12px; padding: 18px; display: grid; gap: 10px; }
+    #boot h2 { margin: 0; color: var(--warn); font-size: 1rem; letter-spacing: .1em; text-transform: uppercase; }
+    #boot pre { margin: 0; white-space: pre-wrap; font-family: var(--mono); font-size: .85rem; color: var(--fg); }
+    #boot button { justify-self: start; }
   </style>
+  <script type="importmap">{ "imports": { "three": "./three.module.js" } }</script>
 </head>
 <body>
   <div id="app"></div>
-  <div id="hud">
-    <button id="btnVR" class="primary" style="display:none">Enter VR</button>
-    <button id="btnGround">Ground (G)</button>
-    <button id="btnRecenter">Recenter (R)</button>
-    <span id="recIndicator" style="display:none">Recording</span>
-    <span id="noVR" style="display:none">Desktop preview — WebXR VR not detected</span>
-    <span class="hint">Click panels · drag to look · Space pauses · Esc/G grounds</span>
-  </div>
+  <div id="ui"></div>
   <div id="toast"></div>
-  <div id="textModal">
+  <div id="boot" hidden>
     <div class="box">
-      <label id="textLabel" for="textArea"></label>
-      <textarea id="textArea" placeholder="Type as much or as little as you like"></textarea>
-      <div class="row">
-        <button id="textCancel">Cancel</button>
-        <button id="textSave" class="primary">Save</button>
-      </div>
+      <h2>The app didn't start</h2>
+      <pre class="msg"></pre>
+      <p class="muted">Try reloading. If it keeps happening, send a screenshot of this message.</p>
+      <button class="go small" onclick="location.reload()">Reload</button>
     </div>
   </div>
-  <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.170.0/build/three.module.js" } }</script>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

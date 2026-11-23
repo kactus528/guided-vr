@@ -1,6 +1,6 @@
 import { App } from './app/App.js';
 
-const app = new App(document.getElementById('app')!);
+const app = new App(document.getElementById('app')!, document.getElementById('ui')!);
 if (new URLSearchParams(location.search).has('debug')) (window as unknown as { gvrApp: App }).gvrApp = app;
 app.init().catch((e) => {
   console.error(e);
