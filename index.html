@@ -7,6 +7,14 @@
   <title>Guided VR Emotional Reprocessing</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" />
+  <!-- pages-redirect -->
+  <script>
+    // This file is the source/dev page. If GitHub Pages is publishing the repo root, forward to the built site in docs/.
+    if (/github\.io$/.test(location.hostname) && !/\/docs\//.test(location.pathname)) {
+      location.replace(location.pathname.replace(/\/?(index\.html)?$/, '/') + 'docs/' + location.search + location.hash);
+    }
+  </script>
+  <!-- /pages-redirect -->
   <script>
     // Startup diagnostics: if the app fails to load, show why instead of a blank page.
     (function () {

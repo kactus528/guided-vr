@@ -15,6 +15,7 @@ execFileSync(esbuild, [
 copyFileSync(three, 'docs/three.module.js');
 for (const f of readdirSync('public')) copyFileSync(`public/${f}`, `docs/${f}`);
 writeFileSync('docs/.nojekyll', '');
-const html = readFileSync('index.html', 'utf8').replace('src="./src/main.ts"', 'src="./app.js"');
+const html = readFileSync('index.html', 'utf8').replace('src="./src/main.ts"', 'src="./app.js"')
+  .replace(/\s*<!-- pages-redirect -->[\s\S]*?<!-- \/pages-redirect -->/, '');
 writeFileSync('docs/index.html', html);
 console.log('docs/ built');
