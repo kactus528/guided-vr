@@ -7,6 +7,9 @@ import { LOCAL_MODELS } from '../ai/LocalWhisper.js';
 import { SpeechRecognitionAdapter } from '../ai/SpeechRecognitionAdapter.js';
 import type { AIConfig, AIReply } from '../ai/types.js';
 import { getAudioContext, unlockAudio } from '../audio/audioContext.js';
+import { KokoroVoice } from '../audio/KokoroVoice.js';
+import { ELEVEN_VOICES, KOKORO_VOICES, VoiceConfigStore, type VoiceConfig } from '../audio/VoiceConfigStore.js';
+import { VoiceEngine } from '../audio/VoiceEngine.js';
 import { MicrophoneRecorder } from '../audio/MicrophoneRecorder.js';
 import { NarrationManager, type NarratorProfile } from '../audio/NarrationManager.js';
 import { get as dbGet, uid } from '../data/db.js';
@@ -14,7 +17,7 @@ import { JournalManager, type RecordingRecord } from '../data/JournalManager.js'
 import { EnvironmentManager } from '../env/EnvironmentManager.js';
 import { GROUNDING_TEXT, GroundingManager, ORIENTATION_NARRATION } from '../safety/GroundingManager.js';
 import { scoreItq, type ItqResult } from '../measures/itq.js';
-import { FOLLOW_UP, GUIDED_SESSION, ITQ_SESSION, RESOURCE_SESSION } from '../session/definitions.js';
+import { DEFINITIONS, FOLLOW_UP, GUIDED_SESSION, ITQ_SESSION, RESOURCE_SESSION } from '../session/definitions.js';
 import { SessionEngine } from '../session/SessionEngine.js';
 import type { Effect, FollowUpDue, SessionDefinition, SessionRecord, StepDef } from '../session/types.js';
 import { SETTING_ROWS, SettingsManager, type Settings } from '../settings/SettingsManager.js';
@@ -37,7 +40,8 @@ type Screen =
   | { name: 'sanctuary' }
   | { name: 'grounding'; back: Screen }
   | { name: 'endConfirm'; back: Screen }
-  | { name: 'ai' };
+  | { name: 'ai' }
+  | { name: 'voice'; back: Screen };
 
 const STAGE_LABEL: Record<string, string> = {
   welcome: 'Welcome', preparation: 'Preparation', target: 'Choosing a focus', baseline: 'Baseline',
@@ -102,6 +106,10 @@ export class App {
   private ai: AIConversationManager;
   private stt: SpeechRecognitionAdapter;
   private crisisNote: string | null = null;
+  private voiceCfg = new VoiceConfigStore();
+  private speech: VoiceEngine;
+  private voiceNote: string | null = null;
+  private prepare: { done: number; total: number } | null = null;
   private aiScreenNote: string | null = null;
   private patternCount = 0;
 
@@ -110,6 +118,8 @@ export class App {
     this.dom = new DomUI(uiRoot);
     this.haptics = new HapticStimulusController(() => this.xr.inputSources());
     this.stim = new BilateralStimulationEngine(this.visual, () => this.audio(), this.haptics);
+    this.speech = new VoiceEngine(this.voiceCfg);
+    this.speech.kokoro.onStatus = () => this.render();
     this.narration = new NarrationManager(
       this.settings,
       (profile: NarratorProfile, segment: string) =>
@@ -118,7 +128,10 @@ export class App {
         this.subtitle = text;
         this.render();
       },
+      this.speech,
     );
+    // Resume loading the on-headset voice in the background if it was set up before.
+    if (this.voiceCfg.get().kokoroEnabled && KokoroVoice.supported()) void this.speech.kokoro.preload().catch(() => undefined);
     this.stt = new SpeechRecognitionAdapter(() => this.aiCfg.get());
     this.stt.local.onStatus = () => this.render();
     if (this.aiCfg.get().stt === 'browser' && !SpeechRecognitionAdapter.browserAvailable()) this.aiCfg.set('stt', 'local');
@@ -191,6 +204,11 @@ export class App {
   private setupHud(): void {
     this.dom.onAction = (id) => this.handle(id);
     this.dom.onText = (field, value) => {
+      if (field.startsWith('cfgv:')) {
+        this.voiceCfg.set(field.slice(5) as keyof VoiceConfig, value.trim() as never);
+        this.render(); // focus and caret are preserved by DomUI
+        return;
+      }
       if (field.startsWith('cfg:')) {
         this.aiCfg.set(field.slice(4) as keyof AIConfig, value.trim() as never);
         return;
@@ -311,6 +329,7 @@ export class App {
       case 'lab': return this.labAction(rest);
       case 'stim': return this.stimAction(rest);
       case 'aiset': return void this.aiScreenAction(rest);
+      case 'voice': return void this.voiceAction(rest);
     }
   }
 
@@ -370,6 +389,7 @@ export class App {
       case 'grounding': v = this.groundingView(); break;
       case 'endConfirm': v = this.endConfirmView(); break;
       case 'ai': v = this.aiView(); break;
+      case 'voice': v = this.voiceView(); break;
     }
     v.subtitle = this.subtitle;
     v.recording = this.recorder.recording;
@@ -382,7 +402,7 @@ export class App {
   /** The headset panel has a fixed size: drop inputs that can't be used in VR and duplicates. */
   private compactForVR(v: PanelView): PanelView {
     const hasAI = v.blocks.some((b) => b.kind === 'ai');
-    const blocks = v.blocks.filter((b) => !(b.kind === 'text' && !b.field.startsWith('cfg:')) && !(hasAI && b.kind === 'voice'));
+    const blocks = v.blocks.filter((b) => !(b.kind === 'text' && !b.field.startsWith('cfg')) && !(hasAI && b.kind === 'voice'));
     const ai = blocks.find((b) => b.kind === 'ai');
     const subtitle = ai && ai.kind === 'ai' && ai.guide && v.subtitle === ai.guide ? null : v.subtitle;
     return { ...v, blocks, subtitle };
@@ -455,6 +475,7 @@ export class App {
         { id: 'menu:lab', label: 'Bilateral Stimulation Lab' },
         { id: 'menu:journal', label: 'Session Journal' },
         { id: 'menu:settings', label: 'Settings' },
+        { id: 'menu:voice', label: 'Voice & narration' },
         later('Voice Studio', 2),
         later('Emotional Pattern Map', 3),
         later('Experimental Flicker Lab', 5),
@@ -469,6 +490,10 @@ export class App {
     switch (a) {
       case 'guided': return this.startSession(GUIDED_SESSION);
       case 'resource': return this.startSession(RESOURCE_SESSION);
+      case 'voice':
+        this.screen = { name: 'voice', back: { name: 'menu' } };
+        this.voiceNote = null;
+        return this.render();
       case 'ai':
         this.screen = { name: 'ai' };
         this.aiScreenNote = null;
@@ -820,6 +845,11 @@ export class App {
   }
 
   private choose(field: string, value: string): void {
+    if (field.startsWith('cfgv:')) {
+      this.voiceCfg.set(field.slice(5) as keyof VoiceConfig, value as never);
+      this.voiceNote = null;
+      return this.render();
+    }
     if (field.startsWith('cfg:')) {
       const k = field.slice(4) as keyof AIConfig;
       const v = value === 'yes' ? true : value === 'no' ? false : value;
@@ -1328,6 +1358,7 @@ export class App {
         { id: 'aiset:deletelogs', label: 'Delete AI conversation logs' },
         { id: 'aiset:deletepatterns', label: `Delete confirmed patterns (${this.patternCount})` },
         { id: 'aiset:forget', label: 'Forget API keys' },
+        { id: 'aiset:voice', label: 'Guide voice…' },
       ],
     });
     blocks.push({ kind: 'buttons', columns: 1, items: [{ id: 'aiset:back', label: 'Back to menu', style: 'primary' }] });
@@ -1374,8 +1405,127 @@ export class App {
         this.aiCfg.forgetKeys();
         this.aiScreenNote = 'API keys removed from this device.';
         break;
+      case 'voice':
+        this.screen = { name: 'voice', back: { name: 'ai' } };
+        return this.render();
       case 'back':
         return this.showMenu();
+    }
+    this.render();
+  }
+
+  // ================= Voice =================
+
+  private voiceView(): PanelView {
+    const c = this.voiceCfg.get();
+    const K = this.speech.kokoro;
+    const inVR = this.xr.presenting ? 'Set this up in the browser view' : undefined;
+    const order = this.speech.order();
+    const elevenFailing = !!this.speech.lastError?.startsWith('ElevenLabs');
+    const first = order.find((e) => (e !== 'kokoro' || K.status === 'ready') && !(e === 'elevenlabs' && elevenFailing)) ?? order[0];
+    const using = !order.length ? 'Subtitles only'
+      : first === 'elevenlabs' ? 'ElevenLabs'
+        : first === 'kokoro' ? `On-headset voice (${KOKORO_VOICES.find((v) => v.id === c.kokoroVoice)?.label.split(' —')[0] ?? c.kokoroVoice})`
+          : 'Browser voice (may be silent on the Quest — subtitles still show)';
+    const blocks: Block[] = [];
+    if (this.voiceNote) blocks.push({ kind: 'note', text: this.voiceNote });
+    blocks.push({ kind: 'lines', lines: [`Speaking with: ${using}`] });
+    blocks.push({
+      kind: 'choice', field: 'cfgv:engine', label: 'Voice', selected: c.engine, options: [
+        { value: 'auto', label: 'Automatic (best available)' },
+        { value: 'elevenlabs', label: 'ElevenLabs (cloud)' },
+        { value: 'kokoro', label: 'On the headset' },
+        { value: 'browser', label: 'Browser voice' },
+        { value: 'off', label: 'Subtitles only' },
+      ],
+    });
+    if (c.engine !== 'off' && c.engine !== 'browser') {
+      // On-headset voice
+      if (c.engine !== 'elevenlabs' || !c.elevenKey) {
+        blocks.push({ kind: 'choice', field: 'cfgv:kokoroVoice', label: 'On-headset voice', selected: c.kokoroVoice, options: KOKORO_VOICES.map((v) => ({ value: v.id, label: v.label })) });
+        const st = !KokoroVoice.supported() ? 'Not supported in this browser.'
+          : K.status === 'ready' ? `Voice ready${K.dtype ? ` (${K.dtype})` : ''}.`
+            : K.status === 'downloading' ? `Downloading voice… ${Math.round(K.progress * 100)}%`
+              : K.status === 'error' ? `Voice error: ${K.error}`
+                : 'Not downloaded yet (about 90 MB, once). It runs fully on the headset; nothing is sent anywhere.';
+        blocks.push({ kind: 'note', tone: K.status === 'error' ? 'warn' : 'info', text: `${st} On a Quest 2 each new sentence takes a few seconds to generate — use "Prepare narration" so the session narration plays instantly.` });
+        const prep = this.prepare ? `Preparing narration… ${this.prepare.done}/${this.prepare.total}` : 'Prepare narration (play instantly)';
+        blocks.push({
+          kind: 'buttons', columns: 2, items: [
+            { id: 'voice:download', label: K.status === 'ready' ? 'Voice downloaded' : K.status === 'downloading' ? 'Downloading…' : 'Download voice', style: K.status === 'ready' || K.status === 'downloading' ? 'disabled' : 'normal' },
+            { id: 'voice:prepare', label: prep, style: K.status === 'ready' && !this.prepare ? 'normal' : 'disabled' },
+          ],
+        });
+      }
+      // ElevenLabs
+      if (c.engine !== 'kokoro') {
+        blocks.push({ kind: 'text', field: 'cfgv:elevenKey', secret: true, value: c.elevenKey, disabledText: inVR, label: 'ElevenLabs API key (optional) — stored only on this device', placeholder: 'sk_…' });
+        blocks.push({ kind: 'choice', field: 'cfgv:elevenVoiceId', label: 'ElevenLabs voice', selected: c.elevenVoiceId, options: ELEVEN_VOICES.map((v) => ({ value: v.id, label: v.label })) });
+        blocks.push({ kind: 'text', field: 'cfgv:elevenVoiceId', value: c.elevenVoiceId, disabledText: inVR, label: 'Or paste any ElevenLabs voice ID' });
+        if (c.elevenKey && !c.elevenConsent) {
+          blocks.push({ kind: 'note', tone: 'warn', text: "With ElevenLabs, the text to be spoken (narration and the guide's replies) is sent to ElevenLabs to generate audio. Your own words and recordings are not sent." });
+          blocks.push({ kind: 'buttons', columns: 1, items: [{ id: 'voice:elevenconsent', label: 'Allow sending text to ElevenLabs', style: 'primary' }] });
+        }
+      }
+    }
+    blocks.push({
+      kind: 'buttons', columns: 2, items: [
+        { id: 'voice:test', label: 'Test voice', style: 'primary' },
+        { id: 'voice:clear', label: 'Clear generated audio' },
+        { id: 'voice:back', label: 'Back' },
+      ],
+    });
+    return {
+      header: 'Voice & narration',
+      title: 'How the app speaks',
+      body: 'Used for session narration and the AI guide. Subtitles always show.',
+      blocks,
+    };
+  }
+
+  private async voiceAction(a: string): Promise<void> {
+    unlockAudio();
+    switch (a) {
+      case 'download':
+        this.voiceCfg.set('kokoroEnabled', true);
+        this.speech.kokoro.preload().catch(() => undefined);
+        break;
+      case 'elevenconsent':
+        this.voiceCfg.set('elevenConsent', true);
+        this.voiceNote = 'ElevenLabs enabled.';
+        break;
+      case 'test':
+        this.voiceNote = 'Speaking…';
+        this.render();
+        await this.narration.say('test', 'Take a slow breath. Notice the support beneath you, and the room around you.');
+        this.voiceNote = this.speech.lastError ? `${this.speech.lastError} — fell back to the next option.`
+          : `Spoke with: ${this.speech.lastEngine === 'elevenlabs' ? 'ElevenLabs' : this.speech.lastEngine === 'kokoro' ? 'on-headset voice' : 'browser voice / subtitles'}.`;
+        break;
+      case 'prepare': {
+        const texts = [...new Set(Object.values(DEFINITIONS).flatMap((d) => d.steps.map((s) => s.narration?.text).filter((t): t is string => !!t && !t.includes('{{'))))];
+        this.prepare = { done: 0, total: texts.length };
+        this.render();
+        for (const t of texts) {
+          const gen = this.speech.clips(t, true, () => false);
+          for (let r = await gen.next(); !r.done; r = await gen.next()) { /* generate + cache */ }
+          this.prepare = { done: this.prepare.done + 1, total: texts.length };
+          this.render();
+        }
+        this.prepare = null;
+        this.voiceNote = `Narration prepared (${texts.length} passages). It will play instantly in sessions.`;
+        break;
+      }
+      case 'clear': {
+        const n = await this.speech.clearGenerated();
+        this.voiceNote = `Cleared ${n} generated audio clip${n === 1 ? '' : 's'}.`;
+        break;
+      }
+      case 'back': {
+        const back = this.screen.name === 'voice' ? this.screen.back : { name: 'menu' as const };
+        if (back.name === 'menu') return this.showMenu();
+        this.screen = back;
+        break;
+      }
     }
     this.render();
   }

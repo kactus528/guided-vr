@@ -161,7 +161,7 @@ export class DomUI {
         if (b.secret) {
           return `<div class="row">${label ? `<p class="lbl">${esc(label)}</p>` : ''}<input type="password" autocomplete="off" data-field="${esc(b.field)}" placeholder="${esc(b.placeholder ?? '')}" value="${esc(b.value ?? '')}"></div>`;
         }
-        if (b.field.startsWith('cfg:')) {
+        if (b.field.startsWith('cfg')) {
           return `<div class="row">${label ? `<p class="lbl">${esc(label)}</p>` : ''}<input type="text" autocomplete="off" data-field="${esc(b.field)}" placeholder="${esc(b.placeholder ?? '')}" value="${esc(b.value ?? '')}"></div>`;
         }
         return `<div class="row">${label ? `<p class="lbl">${esc(label)}</p>` : ''}<textarea rows="3" data-field="${esc(b.field)}" placeholder="${esc(b.placeholder ?? 'Optional')}">${esc(b.value ?? '')}</textarea></div>`;

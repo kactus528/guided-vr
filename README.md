@@ -92,6 +92,16 @@ During reflection steps you can talk or type to a conversational guide (main men
   - These are safeguards, not a detector.
 - **Patterns:** the guide may offer a tentative pattern ("a guess, not a fact"). It's saved only if you confirm it. You can delete conversation logs, confirmed patterns, and API keys from the AI Guide screen.
 
+## Voice & narration
+
+The guide and all session narration speak through one voice engine. Subtitles always show.
+
+- **ElevenLabs** (optional, cloud). You need your own key and consent; only the text to be spoken is sent.
+- **On the headset:** Kokoro-82M via kokoro-js in a Web Worker. It's about 90 MB, downloaded once, and private. On a Quest 2 each new sentence takes a few seconds, so **Prepare narration** pre-generates and caches the fixed narration so it plays instantly.
+- **Fallback:** the browser voice, then subtitles only. *Automatic* uses the first engine that works and falls back when one fails, for example on an expired key.
+
+OpenAI's speech models weren't used because they shut down on 6 January 2027.
+
 ## Verified vs. not verified
 
 - ✅ Type-checked (strict). Unit tests for the session engine, routing, stimulation lock and beat timing.
