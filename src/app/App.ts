@@ -1,3 +1,10 @@
+import { AIConfigStore } from '../ai/AIConfigStore.js';
+import { AIConversationManager } from '../ai/AIConversationManager.js';
+import { CRISIS_MESSAGE } from '../ai/AISafetyController.js';
+import type { SessionSnapshot } from '../ai/ConversationContextBuilder.js';
+import { selectRelevant } from '../ai/JournalRetrievalService.js';
+import { SpeechRecognitionAdapter } from '../ai/SpeechRecognitionAdapter.js';
+import type { AIConfig, AIReply } from '../ai/types.js';
 import { getAudioContext, unlockAudio } from '../audio/audioContext.js';
 import { MicrophoneRecorder } from '../audio/MicrophoneRecorder.js';
 import { NarrationManager, type NarratorProfile } from '../audio/NarrationManager.js';
@@ -28,7 +35,8 @@ type Screen =
   | { name: 'lab' }
   | { name: 'sanctuary' }
   | { name: 'grounding'; back: Screen }
-  | { name: 'endConfirm'; back: Screen };
+  | { name: 'endConfirm'; back: Screen }
+  | { name: 'ai' };
 
 const STAGE_LABEL: Record<string, string> = {
   welcome: 'Welcome', preparation: 'Preparation', target: 'Choosing a focus', baseline: 'Baseline',
@@ -38,6 +46,8 @@ const STAGE_LABEL: Record<string, string> = {
 };
 
 const SET_MODES = ['stim', 'res_stim', 'install_stim', 'bodyscan_stim'];
+/** Steps where the conversational guide is offered (reflection stages first, per spec). */
+const AI_STEPS = ['reflection', 'target_check', 'res_after'];
 
 const ENTRY_LABEL: Record<string, string> = {
   memory: 'Remembered experience', trigger: 'Present-day trigger', belief: 'Negative belief',
@@ -87,6 +97,11 @@ export class App {
   private dom: DomUI;
   private micGranted = false;
   private textSaveTimer: number | null = null;
+  private aiCfg = new AIConfigStore();
+  private ai: AIConversationManager;
+  private crisisNote: string | null = null;
+  private aiScreenNote: string | null = null;
+  private patternCount = 0;
 
   constructor(root: HTMLElement, uiRoot: HTMLElement) {
     this.xr = new XRExperienceManager(root);
@@ -102,12 +117,20 @@ export class App {
         this.render();
       },
     );
+    this.ai = new AIConversationManager(
+      this.aiCfg,
+      new SpeechRecognitionAdapter(() => this.aiCfg.get()),
+      async (answers) => selectRelevant(answers, (await this.journal.list()).filter((r) => r.id !== this.record?.id)),
+      () => this.journal.patterns(),
+      () => this.render(),
+    );
     this.grounding = new GroundingManager({
       stopVisual: () => this.stim.stop('grounding'),
       stopAudio: () => this.audioCtl?.stopAll(),
       stopHaptics: () => undefined, // haptic pulses are one-shot; stopping the engine stops new ones
       pauseNarrationAndRecording: async () => {
         this.narration.stop();
+        this.ai.newStep();
         if (this.recorder.recording) await this.finishRecording();
       },
       showGroundingEnvironment: () => this.env.set('grounding'),
@@ -163,6 +186,14 @@ export class App {
   private setupHud(): void {
     this.dom.onAction = (id) => this.handle(id);
     this.dom.onText = (field, value) => {
+      if (field.startsWith('cfg:')) {
+        this.aiCfg.set(field.slice(4) as keyof AIConfig, value.trim() as never);
+        return;
+      }
+      if (field === 'ai:draft') {
+        this.ai.draft = value;
+        return;
+      }
       if (!this.engine) return;
       this.engine.setAnswer(field, value.trim() ? value : undefined);
       if (this.textSaveTimer) clearTimeout(this.textSaveTimer);
@@ -256,6 +287,7 @@ export class App {
       case 'rate': return this.rate(a, b);
       case 'text': return this.textNoteInVR();
       case 'voice': return void this.voiceCmd(a, b);
+      case 'ai': return void this.aiCmd(a);
       case 'set': {
         this.settings.adjust(a as keyof Settings, b === 'inc' ? 1 : -1);
         return this.render();
@@ -273,6 +305,7 @@ export class App {
       case 'journal': return void this.journalAction(rest);
       case 'lab': return this.labAction(rest);
       case 'stim': return this.stimAction(rest);
+      case 'aiset': return void this.aiScreenAction(rest);
     }
   }
 
@@ -331,13 +364,23 @@ export class App {
       case 'sanctuary': v = this.sanctuaryView(); break;
       case 'grounding': v = this.groundingView(); break;
       case 'endConfirm': v = this.endConfirmView(); break;
+      case 'ai': v = this.aiView(); break;
     }
     v.subtitle = this.subtitle;
     v.recording = this.recorder.recording;
     if (this.transientNote) v.blocks.unshift({ kind: 'note', text: this.transientNote, tone: 'warn' });
-    if (vr) this.panel.setView(v);
+    if (vr) this.panel.setView(this.compactForVR(v));
     const key = `${this.screen.name}:${this.screen.name === 'session' ? this.engine?.current.id : ''}:${this.paused}`;
     this.dom.showPage(v, key);
+  }
+
+  /** The headset panel has a fixed size: drop inputs that can't be used in VR and duplicates. */
+  private compactForVR(v: PanelView): PanelView {
+    const hasAI = v.blocks.some((b) => b.kind === 'ai');
+    const blocks = v.blocks.filter((b) => !(b.kind === 'text' && !b.field.startsWith('cfg:')) && !(hasAI && b.kind === 'voice'));
+    const ai = blocks.find((b) => b.kind === 'ai');
+    const subtitle = ai && ai.kind === 'ai' && ai.guide && v.subtitle === ai.guide ? null : v.subtitle;
+    return { ...v, blocks, subtitle };
   }
 
   private stimView(): PanelView {
@@ -398,6 +441,7 @@ export class App {
       kind: 'buttons', columns: 2, height: 66, items: [
         { id: 'menu:resource', label: 'Resource & Stabilization' },
         { id: 'menu:itq', label: lastItq ? `Monthly questionnaire${itqDue ? ' · due' : ''}` : 'Monthly questionnaire (ITQ)' },
+        { id: 'menu:ai', label: this.aiCfg.get().provider === 'off' ? 'AI Guide (optional)' : this.aiCfg.ready() ? 'AI Guide · on' : 'AI Guide · needs setup' },
       ],
     });
     blocks.push({
@@ -420,6 +464,11 @@ export class App {
     switch (a) {
       case 'guided': return this.startSession(GUIDED_SESSION);
       case 'resource': return this.startSession(RESOURCE_SESSION);
+      case 'ai':
+        this.screen = { name: 'ai' };
+        this.aiScreenNote = null;
+        this.patternCount = (await this.journal.patterns().catch(() => [])).length;
+        return this.render();
       case 'itq': return this.startSession(ITQ_SESSION);
       case 'followup':
         if (this.menuFollowUp) return this.startSession(FOLLOW_UP, this.menuFollowUp.session, this.menuFollowUp.fu);
@@ -480,6 +529,8 @@ export class App {
         .filter((r) => r.definitionId === ITQ_SESSION.id && r.status === 'completed');
     }
     this.voice.clear();
+    this.ai.reset();
+    this.crisisNote = null;
     this.paused = false;
     this.grounding.uses = 0;
     this.screen = { name: 'session' };
@@ -493,6 +544,7 @@ export class App {
     this.narration.stop();
     this.narration.clearLast();
     this.transientNote = null;
+    this.ai.newStep();
     rec.stepTrail.push({ stepId: step.id, at: new Date().toISOString() });
     if (effects.includes('lockStim') && !rec.stimLocked) {
       rec.events.push({ type: 'stim-locked', stepId: step.id, at: now() });
@@ -599,6 +651,20 @@ export class App {
           break;
         }
       }
+    }
+    if (this.aiCfg.get().provider !== 'off' && AI_STEPS.includes(step.id)) {
+      const lastUser = [...this.ai.turns].reverse().find((t) => t.role === 'user' && t.stepId === step.id);
+      blocks.push({
+        kind: 'ai',
+        state: this.ai.state,
+        canVoice: this.ai.canListen(),
+        interim: this.ai.interim,
+        you: this.ai.lastReply || this.ai.state === 'thinking' ? lastUser?.text : undefined,
+        guide: this.ai.lastReply?.say,
+        hypothesis: this.ai.pendingHypothesis ?? undefined,
+        notice: this.ai.notice ?? (!this.aiCfg.ready() && this.aiCfg.get().provider !== 'scripted' ? 'AI guide needs setup and consent (main menu → AI Guide). Using built-in prompts.' : undefined),
+        draft: this.ai.draft,
+      });
     }
     if (step.actions?.length) blocks.push(this.actionsBlock(step));
     return { header, title: e.template(step.title), body: e.bodyFor(step), blocks, footer: this.standardFooter() };
@@ -747,6 +813,13 @@ export class App {
   }
 
   private choose(field: string, value: string): void {
+    if (field.startsWith('cfg:')) {
+      const k = field.slice(4) as keyof AIConfig;
+      const v = value === 'yes' ? true : value === 'no' ? false : value;
+      this.aiCfg.set(k, v as never);
+      this.aiScreenNote = null;
+      return this.render();
+    }
     const e = this.engine;
     if (!e) return;
     const inp = e.visibleInputs().find((i) => e.resolveField(i.field) === field);
@@ -805,6 +878,7 @@ export class App {
 
   private async autosave(): Promise<void> {
     if (!this.record) return;
+    if (this.ai.turns.length) this.record.ai = this.ai.turns.map((t) => ({ ...t }));
     try {
       await this.journal.save(structuredClone(this.record));
     } catch (e) {
@@ -827,6 +901,8 @@ export class App {
     this.engine = null;
     this.record = null;
     this.voice.clear();
+    this.ai.reset();
+    this.crisisNote = null;
     this.paused = false;
     this.grounding.release();
   }
@@ -968,6 +1044,7 @@ export class App {
         { id: 'g:exitvr', label: 'Exit VR', style: this.xr.presenting ? 'normal' : 'disabled' },
       ];
     const blocks: Block[] = [];
+    if (this.crisisNote) blocks.push({ kind: 'note', tone: 'warn', text: this.crisisNote });
     if (inSession) blocks.push({ kind: 'note', text: 'Nothing restarts automatically. Returning takes you to a check-in, not into stimulation.' });
     blocks.push({ kind: 'buttons', items, columns: 2, height: 70 });
     return {
@@ -1052,6 +1129,228 @@ export class App {
   private fillDate(text: string): string {
     const d = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     return text.replace(/\{\{date\}\}/g, d);
+  }
+
+  // ================= AI guide =================
+
+  private snapshot(): SessionSnapshot {
+    const e = this.engine!;
+    return {
+      stage: e.current.stage,
+      stepId: e.current.id,
+      stepTitle: e.template(e.current.title),
+      sessionType: e.def.title,
+      processingStyle: e.answers.processingStyle as string | undefined,
+      setCount: e.setCount,
+      answers: e.answers,
+    };
+  }
+
+  private async aiCmd(cmd: string): Promise<void> {
+    const e = this.engine;
+    if (!e || this.screen.name !== 'session') return;
+    if (cmd === 'talk') {
+      this.narration.stop();
+      this.playing?.pause();
+      return this.ai.startListening();
+    }
+    if (cmd === 'stop') return this.handleAIResult(await this.ai.stopListening(this.snapshot()));
+    if (cmd === 'send') {
+      const text = this.ai.draft.trim();
+      if (!text || this.ai.state !== 'idle') return;
+      this.ai.draft = '';
+      return this.handleAIResult(await this.ai.ask(text, this.snapshot()));
+    }
+    if (cmd === 'confirm' && this.ai.pendingHypothesis) {
+      await this.journal.savePattern({
+        id: uid('pat'), text: this.ai.pendingHypothesis, source: 'ai-hypothesis', sessionId: this.record?.id, createdAt: now(),
+      });
+      this.ai.pendingHypothesis = null;
+      this.toast('Pattern saved. You can review or delete it under AI Guide.');
+      return this.render();
+    }
+    if (cmd === 'dismiss') {
+      this.ai.pendingHypothesis = null;
+      return this.render();
+    }
+  }
+
+  private async handleAIResult(r: { reply: AIReply | null; safety: { level: string }; text: string }): Promise<void> {
+    if (!this.engine || !this.record) return;
+    if (r.safety.level !== 'ok') {
+      // Same rule as the check-ins: reported disorientation or crisis stops processing for the session.
+      this.engine.lockStimulation();
+      this.record.stimLocked = true;
+      this.record.events.push({ type: 'disorientation-reported', stepId: this.engine.current.id, at: now() });
+      if (r.safety.level === 'crisis') this.crisisNote = CRISIS_MESSAGE;
+      void this.autosave();
+      this.groundNow();
+      if (r.safety.level === 'crisis') void this.narration.say('crisis', CRISIS_MESSAGE);
+      return;
+    }
+    void this.autosave();
+    if (!r.reply) return this.render();
+    if (this.aiCfg.get().speakReplies) void this.narration.say('ai', r.reply.say);
+    this.execAIAction(r.reply.action, r.text);
+    this.render();
+  }
+
+  /** The session controller's side of the contract: only validated, low-risk actions are carried out. */
+  private execAIAction(action: AIReply['action'], userText: string): void {
+    const e = this.engine!;
+    switch (action) {
+      case 'repeat_instruction':
+        if (e.current.narration) setTimeout(() => void this.narration.say(e.current.narration!.segment, e.template(e.current.narration!.text)), 2500);
+        return;
+      case 'record_reflection': {
+        const field = e.visibleInputs().find((i) => i.kind === 'text');
+        const key = field ? e.resolveField(field.field) : `ai_note_${e.setCount}`;
+        const prev = String(e.getAnswer(key) ?? '');
+        e.setAnswer(key, prev ? `${prev}\n${userText}` : userText);
+        void this.autosave();
+        return;
+      }
+      case 'show_emotional_rating':
+        this.transientNote = 'If you like, rate how things feel right now using the scale below.';
+        return;
+      case 'pause_session':
+        if (!this.paused) this.togglePause();
+        return;
+      case 'begin_grounding':
+        this.groundNow();
+        return;
+      case 'finish_session':
+        if (e.def.closingStep && e.current.id !== e.def.closingStep) e.enter(e.def.closingStep);
+        return;
+      default:
+    }
+  }
+
+  private aiView(): PanelView {
+    const c = this.aiCfg.get();
+    const cloud = c.provider === 'anthropic' || c.provider === 'openai' || c.provider === 'proxy';
+    const blocks: Block[] = [];
+    if (this.aiScreenNote) blocks.push({ kind: 'note', text: this.aiScreenNote });
+    const status = c.provider === 'off' ? 'Off. Sessions use the built-in narration only.'
+      : c.provider === 'scripted' ? 'Built-in prompts: short reflective replies, fully offline, no AI.'
+        : this.aiCfg.ready() ? `On — ${c.provider === 'anthropic' ? 'Anthropic' : c.provider === 'openai' ? 'OpenAI-compatible' : 'your proxy'}${c.model ? ` (${c.model})` : ''}.`
+          : 'Needs setup and consent before anything is sent.';
+    blocks.push({ kind: 'lines', lines: [`Status: ${status}`] });
+    blocks.push({
+      kind: 'choice', field: 'cfg:provider', label: 'Guide', selected: c.provider, options: [
+        { value: 'off', label: 'Off' },
+        { value: 'scripted', label: 'Built-in prompts (offline)' },
+        { value: 'anthropic', label: 'Anthropic (Claude)' },
+        { value: 'openai', label: 'OpenAI-compatible / local' },
+        { value: 'proxy', label: 'My own proxy' },
+      ],
+    });
+    const vr = this.xr.presenting;
+    const inVR = vr ? 'Set this up in the browser view' : undefined;
+    if (cloud) {
+      blocks.push({
+        kind: 'text', field: 'cfg:apiKey', secret: true, disabledText: inVR, value: c.apiKey,
+        label: c.provider === 'proxy' ? 'Proxy access token (optional)' : 'API key — stored only on this device',
+        placeholder: c.provider === 'anthropic' ? 'sk-ant-…' : 'sk-…',
+      });
+      blocks.push({ kind: 'text', field: 'cfg:model', label: 'Model', value: c.model, disabledText: inVR, placeholder: c.provider === 'anthropic' ? 'claude-sonnet-5-5' : 'model name' });
+      if (c.provider !== 'anthropic') {
+        blocks.push({
+          kind: 'text', field: 'cfg:baseUrl', disabledText: inVR, value: c.baseUrl,
+          label: c.provider === 'proxy' ? 'Proxy URL (OpenAI-compatible)' : 'Base URL (OpenAI, OpenRouter, or a local server)',
+          placeholder: 'https://api.openai.com/v1',
+        });
+      }
+    }
+    if (c.provider !== 'off') {
+      blocks.push({
+        kind: 'choice', field: 'cfg:stt', label: 'Voice input', selected: c.stt, options: [
+          { value: 'browser', label: SpeechRecognitionAdapter.browserAvailable() ? 'Browser speech recognition' : 'Browser speech (not available here)' },
+          { value: 'whisper', label: 'Whisper-compatible service' },
+          { value: 'typing', label: 'Typing only' },
+        ],
+      });
+      if (c.stt === 'whisper') {
+        blocks.push({ kind: 'text', field: 'cfg:sttKey', secret: true, disabledText: inVR, value: c.sttKey, label: 'Transcription API key', placeholder: 'sk-…' });
+        blocks.push({ kind: 'text', field: 'cfg:sttBaseUrl', disabledText: inVR, value: c.sttBaseUrl, label: 'Transcription base URL' });
+      }
+      blocks.push({
+        kind: 'choice', field: 'cfg:includeHistory', label: 'Let the guide see related past sessions and your confirmed patterns', selected: c.includeHistory ? 'yes' : 'no',
+        options: [{ value: 'no', label: 'No (default)' }, { value: 'yes', label: 'Yes' }],
+      });
+      blocks.push({
+        kind: 'choice', field: 'cfg:speakReplies', label: 'Speak replies aloud', selected: c.speakReplies ? 'yes' : 'no',
+        options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'Subtitles only' }],
+      });
+    }
+    if (cloud && !this.aiCfg.ready()) {
+      const sent = [
+        'what you say or type to the guide (as text)',
+        'the current step, your chosen target, feelings, beliefs and ratings',
+        ...(c.includeHistory ? ['short text summaries of a few related past sessions, and your confirmed patterns'] : []),
+      ];
+      const audio = c.stt === 'browser' ? ' Browser speech recognition may send your voice to the browser maker (for Chrome-based browsers, Google) to transcribe it.'
+        : c.stt === 'whisper' ? ' With Whisper, your spoken clip is sent to the transcription service.' : '';
+      blocks.push({
+        kind: 'note', tone: 'warn',
+        text: `Consent needed. When you use the guide, this will be sent to ${c.provider === 'anthropic' ? 'Anthropic' : c.provider === 'proxy' ? 'your proxy' : c.baseUrl || 'the service you entered'}: ${sent.join('; ')}. ` +
+          `Voice recordings stay on this device.${audio} The guide is not a therapist, cannot start or change stimulation, and you can turn it off or delete its logs at any time.`,
+      });
+      blocks.push({ kind: 'buttons', columns: 1, items: [{ id: 'aiset:consent', label: 'I understand — allow sending', style: 'primary' }] });
+    }
+    blocks.push({
+      kind: 'buttons', columns: 2, items: [
+        { id: 'aiset:test', label: 'Test the guide', style: c.provider === 'off' ? 'disabled' : 'normal' },
+        { id: 'aiset:deletelogs', label: 'Delete AI conversation logs' },
+        { id: 'aiset:deletepatterns', label: `Delete confirmed patterns (${this.patternCount})` },
+        { id: 'aiset:forget', label: 'Forget API keys' },
+      ],
+    });
+    blocks.push({ kind: 'buttons', columns: 1, items: [{ id: 'aiset:back', label: 'Back to menu', style: 'primary' }] });
+    return {
+      header: 'AI guide',
+      title: 'Conversational guide (optional)',
+      body: 'During reflection, talk or type to a guide that responds briefly and can remember what you shared. It works inside the session — it can suggest pausing or grounding, but it can never start sets or change stimulation.',
+      blocks,
+    };
+  }
+
+  private async aiScreenAction(a: string): Promise<void> {
+    switch (a) {
+      case 'consent':
+        this.aiCfg.consent();
+        this.aiScreenNote = 'Consent recorded for this provider. Changing provider, voice input, or history sharing will ask again.';
+        break;
+      case 'test': {
+        const fake: SessionSnapshot = { stage: 'reflection', stepId: 'test', stepTitle: 'Test', sessionType: 'test', setCount: 0, answers: {} };
+        const tmp = this.ai.turns;
+        this.ai.reset();
+        this.aiScreenNote = 'Testing…';
+        this.render();
+        const r = await this.ai.ask('This is a connection test. Please reply briefly.', fake);
+        this.aiScreenNote = `${this.ai.notice ? `${this.ai.notice} ` : ''}Guide replied: "${r.reply?.say ?? '—'}"`;
+        this.ai.reset(tmp);
+        break;
+      }
+      case 'deletelogs': {
+        const n = await this.journal.deleteAIConversations();
+        this.ai.reset();
+        this.aiScreenNote = `Deleted AI conversation logs from ${n} session${n === 1 ? '' : 's'}.`;
+        break;
+      }
+      case 'deletepatterns':
+        await this.journal.deletePatterns();
+        this.patternCount = 0;
+        this.aiScreenNote = 'Confirmed patterns deleted.';
+        break;
+      case 'forget':
+        this.aiCfg.forgetKeys();
+        this.aiScreenNote = 'API keys removed from this device.';
+        break;
+      case 'back':
+        return this.showMenu();
+    }
+    this.render();
   }
 
   // ================= Settings =================

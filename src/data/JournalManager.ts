@@ -1,3 +1,4 @@
+import type { ConfirmedPattern } from '../ai/types.js';
 import type { FollowUpDue, SessionRecord } from '../session/types.js';
 import { clear, del, get, getAll, getAllBy, put } from './db.js';
 
@@ -51,6 +52,32 @@ export class JournalManager {
   async deleteAll(): Promise<void> {
     await clear('recordings');
     await clear('sessions');
+    await clear('patterns');
+  }
+
+  async patterns(): Promise<ConfirmedPattern[]> {
+    return (await getAll<ConfirmedPattern>('patterns')).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async savePattern(p: ConfirmedPattern): Promise<void> {
+    await put('patterns', p);
+  }
+
+  async deletePatterns(): Promise<void> {
+    await clear('patterns');
+  }
+
+  /** Removes stored AI conversation turns from every session (recordings and answers are kept). */
+  async deleteAIConversations(): Promise<number> {
+    let n = 0;
+    for (const s of await this.list()) {
+      if (s.ai?.length) {
+        delete s.ai;
+        await put('sessions', s);
+        n++;
+      }
+    }
+    return n;
   }
 
   static followUpsFor(endedAt: number): FollowUpDue[] {
@@ -82,6 +109,7 @@ export class JournalManager {
       exportedAt: new Date().toISOString(),
       note: 'Personal observational data. Not clinical data and not evidence of treatment efficacy.',
       sessions,
+      patterns: await getAll('patterns'),
       recordings: recs,
     };
     return new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });

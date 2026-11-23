@@ -80,6 +80,13 @@
     .ends { display: flex; justify-content: space-between; font-size: .8rem; color: var(--muted); }
     .linkbtn { font: inherit; font-size: .8rem; letter-spacing: 0; text-transform: none; color: var(--accent); background: none; border: 0; padding: 0 0 0 8px; cursor: pointer; text-decoration: underline; }
     textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; width: 100%; box-sizing: border-box; resize: vertical; line-height: 1.4; }
+    input[type=text], input[type=password] { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; width: 100%; box-sizing: border-box; }
+    .aibox { display: grid; gap: 10px; border: 1px solid rgba(138,180,255,.35); border-radius: 12px; padding: 14px; background: rgba(138,180,255,.05); }
+    .aibox .guide { margin: 0; font-size: 1.05rem; font-weight: 500; }
+    .aibox .aiwarn { margin: 0; color: var(--warn); font-size: .9rem; }
+    .aibox .hyp { border: 1px dashed var(--accent); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; }
+    .aibox .hyp p { margin: 0; }
+    .aitype { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
     textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .recbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .recnow { color: var(--rec); font-weight: 600; }
@@ -100,8 +107,8 @@
     .foot { position: sticky; bottom: 0; display: flex; gap: 8px; padding: 14px 0 calc(14px + env(safe-area-inset-bottom, 0px)); margin-top: 22px;
       background: linear-gradient(to top, var(--bg) 70%, transparent); }
     .foot .go { flex: 1; }
-    .caption { position: fixed; left: 50%; transform: translateX(-50%); top: 70px; z-index: 30; max-width: 560px; width: calc(100% - 48px);
-      background: rgba(0,0,0,.78); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: .95rem; color: #f3efe2; pointer-events: none; }
+    .caption { position: sticky; top: 61px; z-index: 15; box-sizing: border-box; max-width: 588px; width: calc(100% - 32px); margin: 8px auto 0;
+      background: rgba(0,0,0,.85); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: .95rem; color: #f3efe2; pointer-events: none; }
     .stimbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 30; display: flex; gap: 8px; align-items: center;
       background: rgba(10,13,20,.85); border: 1px solid var(--line); border-radius: 14px; padding: 8px; }
     .stimlabel { padding: 0 10px; color: var(--muted); font-size: .9rem; }

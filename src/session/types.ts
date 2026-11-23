@@ -158,4 +158,6 @@ export interface SessionRecord {
   stepTrail: { stepId: string; at: string }[];
   followUps?: FollowUpDue[];
   stimLocked: boolean;
+  /** Conversational AI guide turns (text only), if the guide was used. */
+  ai?: { role: 'user' | 'assistant'; text: string; at: string; stepId?: string }[];
 }

@@ -71,6 +71,25 @@ Each stimulation set is logged with its settings snapshot, planned and actual du
 
 What the research argued *against*: personalising eye-movement speed to working-memory capacity didn't help in controlled studies, so calibration stays about comfort. "EMDR 2.0"-style extra taxing showed no added effect.
 
+## AI guide (optional)
+
+During reflection steps you can talk or type to a conversational guide (main menu → **AI Guide**).
+
+- **Providers:**
+  - Anthropic (Claude), called directly from the browser with your own key.
+  - Any OpenAI-compatible endpoint (OpenAI, OpenRouter, or a local server).
+  - Your own proxy (`proxy/worker.js`, a Cloudflare Worker that keeps the key off the headset).
+  - Built-in offline prompts, which are also the automatic fallback when the AI is unavailable or fails.
+- **Voice:** push-to-talk through browser speech recognition or a Whisper-compatible service, or typing only. Replies are spoken with browser TTS and shown as subtitles.
+- **Consent:** nothing is sent until you consent for the chosen provider. Changing provider, voice input or history sharing asks again. Past-session history and confirmed patterns are off by default; when on, only a few related sessions go out, as short text summaries. Raw recordings never leave the device.
+- **Control:** the guide can only *request* `repeat_instruction`, `record_reflection`, `show_emotional_rating`, `pause_session`, `begin_grounding` or `finish_session`. A deterministic validator checks each request against the current stage, and anything else is ignored. The guide can't start sets or change stimulation.
+- **Safety:** deterministic keyword checks run on what you say *before* anything reaches the AI.
+  - Disorientation phrases ground you and lock stimulation for the session.
+  - Crisis phrases do the same, skip the AI entirely, and show crisis resources (988 in the US).
+  - Replies that diagnose, claim to be a therapist, suggest hidden memories, or pressure you to continue are replaced with a neutral prompt.
+  - These are safeguards, not a detector.
+- **Patterns:** the guide may offer a tentative pattern ("a guess, not a fact"). It's saved only if you confirm it. You can delete conversation logs, confirmed patterns, and API keys from the AI Guide screen.
+
 ## Verified vs. not verified
 
 - ✅ Type-checked (strict). Unit tests for the session engine, routing, stimulation lock and beat timing.

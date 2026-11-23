@@ -13,7 +13,11 @@ export type Block =
   | { kind: 'chips'; field: string; label?: string; items: string[]; selected: string[] }
   | { kind: 'choice'; field: string; label?: string; options: { value: string; label: string }[]; selected?: string; stacked?: boolean }
   | { kind: 'rating'; field: string; label: string; min: number; max: number; value?: number; minLabel?: string; maxLabel?: string }
-  | { kind: 'text'; field: string; label?: string; value?: string; placeholder?: string; disabledText?: string }
+  | { kind: 'text'; field: string; label?: string; value?: string; placeholder?: string; disabledText?: string; secret?: boolean }
+  | {
+    kind: 'ai'; state: 'idle' | 'listening' | 'thinking'; canVoice: boolean; interim?: string; you?: string; guide?: string;
+    hypothesis?: string; notice?: string; draft?: string;
+  }
   | { kind: 'voice'; field: string; label?: string; state: 'idle' | 'recording' | 'recorded' | 'unsupported' | 'denied'; seconds?: number }
   | { kind: 'settings'; rows: { key: string; label: string; value: string }[] }
   | { kind: 'lines'; lines: string[]; size?: number }
@@ -70,6 +74,8 @@ export class Panel {
   private hover: string | null = null;
   private view: PanelView = { blocks: [] };
   private pad = 44;
+  private baseY: number | null = null;
+  private readonly heightM: number;
   onAction: (id: string) => void = () => {};
 
   constructor(readonly widthM: number, readonly pxW: number, readonly pxH: number) {
@@ -83,6 +89,7 @@ export class Panel {
     this.tex.generateMipmaps = true;
     this.tex.minFilter = THREE.LinearMipmapLinearFilter;
     const h = (widthM * pxH) / pxW;
+    this.heightM = h;
     this.mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(widthM, h),
       new THREE.MeshBasicMaterial({ map: this.tex, transparent: true, depthWrite: false }),
@@ -111,7 +118,7 @@ export class Panel {
 
   private hitAt(uv: THREE.Vector2): Hit | null {
     const x = uv.x * this.pxW;
-    const y = (1 - uv.y) * this.pxH;
+    const y = (1 - uv.y) * this.canvas.height;
     for (let i = this.hits.length - 1; i >= 0; i--) {
       const h = this.hits[i];
       if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) return h;
@@ -202,13 +209,30 @@ export class Panel {
     return this.textBlock(text, x, y, w, 26, C.dim, 500) + 6;
   }
 
+  /** Grow the panel downward (keeping its top edge) when content needs more room. */
+  private resizeTo(h: number): void {
+    this.canvas.height = h;
+    this.tex.dispose();
+    this.tex.needsUpdate = true;
+    const scale = h / this.pxH;
+    if (this.baseY === null) this.baseY = this.mesh.position.y;
+    this.mesh.scale.y = scale;
+    this.mesh.position.y = (this.baseY ?? 0) - (this.heightM * (scale - 1)) / 2;
+  }
+
   private draw(): void {
     const g = this.g;
     const W = this.pxW;
-    const H = this.pxH;
+    const H = this.canvas.height;
     const pad = this.pad;
     const v = this.view;
     this.hits = [];
+    const footH0 = v.footer?.length ? 64 : 0;
+    let subH0 = 0;
+    if (v.subtitle) {
+      this.font(25, 400);
+      subH0 = this.wrap(v.subtitle, W - pad * 2 - 40).length * 33 + 22 + 14;
+    }
     g.clearRect(0, 0, W, H);
     this.rr(2, 2, W - 4, H - 4, 28);
     g.fillStyle = C.bg;
@@ -239,6 +263,13 @@ export class Panel {
     if (v.body) y = this.textBlock(v.body, pad, y, cw, 28, C.text, 400, 1.4) + 14;
 
     for (const b of v.blocks) y = this.drawBlock(b, pad, y, cw) + 16;
+    const needed = Math.ceil(y + subH0 + footH0 + pad + 8);
+    const target = Math.min(Math.round(this.pxH * 1.7), Math.max(this.pxH, needed));
+    if (target !== H) {
+      this.resizeTo(target);
+      this.draw();
+      return;
+    }
 
     // Subtitle + footer anchored to the bottom.
     const footH = v.footer?.length ? 64 : 0;
@@ -399,7 +430,7 @@ export class Panel {
         g.textBaseline = 'middle';
         const shown = b.disabledText ?? (b.value || b.placeholder || 'Tap to type');
         g.fillStyle = b.value && !b.disabledText ? C.text : C.dim;
-        let t = shown;
+        let t = b.secret && b.value && !b.disabledText ? '•'.repeat(Math.min(24, b.value.length)) : shown;
         while (g.measureText(t).width > w - 40 && t.length > 4) t = t.slice(0, -2);
         g.fillText(t === shown ? t : `${t}…`, x + 20, y + h / 2);
         this.hits.push({ x, y, w, h, id, disabled: !!b.disabledText });
@@ -441,6 +472,47 @@ export class Panel {
           g.fillText(`Saved · ${fmtSecs(secs)}`, tx, y + h / 2);
         }
         return y + h;
+      }
+      case 'ai': {
+        const h0 = y;
+        y += 12;
+        this.font(21, 700);
+        g.fillStyle = '#b9c8ff';
+        g.textAlign = 'left';
+        g.textBaseline = 'top';
+        g.fillText('AI GUIDE', x + 20, y);
+        y += 32;
+        const btn: Btn | null =
+          b.state === 'listening' ? { id: 'ai|stop', label: '■  Done talking', style: 'danger' }
+            : b.state === 'thinking' ? { id: 'ai|wait', label: 'Thinking…', style: 'disabled' }
+              : b.canVoice ? { id: 'ai|talk', label: '🎙  Talk to guide', style: 'primary' } : null;
+        if (btn) {
+          this.button(btn, x + 20, y, 300, 60, 25);
+          if (b.state === 'listening') {
+            this.font(23, 500);
+            g.fillStyle = C.rec;
+            g.textBaseline = 'middle';
+            g.fillText(b.interim ? `“${b.interim.slice(-48)}”` : 'Listening…', x + 340, y + 30);
+          }
+          y += 72;
+        } else {
+          y = this.textBlock('Voice input is off or unavailable here. Type to the guide in the browser view.', x + 20, y, w - 40, 22, C.dim) + 6;
+        }
+        if (b.you) y = this.textBlock(`You: ${b.you}`, x + 20, y, w - 40, 23, C.dim) + 4;
+        if (b.guide) y = this.textBlock(`Guide: ${b.guide}`, x + 20, y, w - 40, 25, C.text, 500) + 6;
+        if (b.notice) y = this.textBlock(b.notice, x + 20, y, w - 40, 21, C.warn) + 4;
+        if (b.hypothesis) {
+          y = this.textBlock(`Possible pattern (a guess, not a fact): ${b.hypothesis}`, x + 20, y + 4, w - 40, 23, '#d8e2ff', 500) + 8;
+          this.button({ id: 'ai|confirm', label: 'Yes, that fits — save it' }, x + 20, y, 300, 54, 22);
+          this.button({ id: 'ai|dismiss', label: "No, it doesn't", style: 'quiet' }, x + 332, y, 220, 54, 22);
+          y += 64;
+        }
+        const hh = y - h0 + 8;
+        g.strokeStyle = 'rgba(138,180,255,0.35)';
+        g.lineWidth = 2;
+        this.rr(x, h0, w, hh, 14);
+        g.stroke();
+        return h0 + hh;
       }
       case 'settings': {
         const colW = (w - 30) / 2;

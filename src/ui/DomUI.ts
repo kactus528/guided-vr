@@ -36,8 +36,8 @@ export class DomUI {
         <button class="chip" data-top="ground" type="button">Ground</button>
         <button class="go small" data-top="vr" type="button" hidden>Enter VR</button>
       </header>
-      <main class="page"></main>
       <div class="caption" hidden></div>
+      <main class="page"></main>
       <div class="stimbar" hidden></div>`;
     this.bar = root.querySelector('.topbar')!;
     this.page = root.querySelector('.page')!;
@@ -92,7 +92,7 @@ export class DomUI {
     else window.scrollTo(0, scroll);
     this.lastKey = key;
     if (focusField) {
-      const el = this.page.querySelector<HTMLTextAreaElement>(`textarea[data-field="${CSS.escape(focusField)}"]`);
+      const el = this.page.querySelector<HTMLTextAreaElement>(`[data-field="${CSS.escape(focusField)}"]`);
       if (el) {
         el.focus();
         if (sel) el.setSelectionRange(sel[0] ?? 0, sel[1] ?? 0);
@@ -158,6 +158,12 @@ export class DomUI {
       }
       case 'text': {
         const label = (b.label ?? '').replace(/\s*\(desktop\)/i, '');
+        if (b.secret) {
+          return `<div class="row">${label ? `<p class="lbl">${esc(label)}</p>` : ''}<input type="password" autocomplete="off" data-field="${esc(b.field)}" placeholder="${esc(b.placeholder ?? '')}" value="${esc(b.value ?? '')}"></div>`;
+        }
+        if (b.field.startsWith('cfg:')) {
+          return `<div class="row">${label ? `<p class="lbl">${esc(label)}</p>` : ''}<input type="text" autocomplete="off" data-field="${esc(b.field)}" placeholder="${esc(b.placeholder ?? '')}" value="${esc(b.value ?? '')}"></div>`;
+        }
         return `<div class="row">${label ? `<p class="lbl">${esc(label)}</p>` : ''}<textarea rows="3" data-field="${esc(b.field)}" placeholder="${esc(b.placeholder ?? 'Optional')}">${esc(b.value ?? '')}</textarea></div>`;
       }
       case 'voice': {
@@ -174,6 +180,24 @@ export class DomUI {
                  <button type="button" class="chip" data-id="${id('delete')}">Delete</button>
                  <span class="muted">Saved · ${fmtSecs(b.seconds ?? 0)}</span>`;
         return `<div class="row">${lbl}<div class="recbar">${inner}</div></div>`;
+      }
+      case 'ai': {
+        const talk =
+          b.state === 'listening' ? `<button type="button" class="go rec on small" data-id="ai|stop">■ Done talking</button><span class="recnow">${esc(b.interim ? `“${b.interim}”` : 'Listening…')}</span>`
+            : b.state === 'thinking' ? '<span class="muted">Thinking…</span>'
+              : b.canVoice ? '<button type="button" class="go small" data-id="ai|talk">🎙 Talk to guide</button>' : '';
+        return `<div class="aibox">
+          <p class="eyebrow">AI guide</p>
+          <div class="recbar">${talk}</div>
+          ${b.you ? `<p class="muted">You: ${esc(b.you)}</p>` : ''}
+          ${b.guide ? `<p class="guide">${esc(b.guide)}</p>` : ''}
+          ${b.notice ? `<p class="aiwarn">${esc(b.notice)}</p>` : ''}
+          ${b.hypothesis ? `<div class="hyp"><p><strong>Possible pattern</strong> <span class="muted">(a guess, not a fact)</span><br>${esc(b.hypothesis)}</p>
+            <div class="recbar"><button type="button" class="go secondary small" data-id="ai|confirm">Yes, that fits — save it</button>
+            <button type="button" class="chip" data-id="ai|dismiss">No, it doesn't</button></div></div>` : ''}
+          <div class="aitype"><textarea rows="2" data-field="ai:draft" placeholder="Or type to the guide…">${esc(b.draft ?? '')}</textarea>
+          <button type="button" class="go secondary small" data-id="ai|send"${b.state !== 'idle' ? ' disabled' : ''}>Send</button></div>
+        </div>`;
       }
       case 'settings':
         return `<div class="settings">${b.rows

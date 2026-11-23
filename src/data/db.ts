@@ -1,9 +1,9 @@
 /** Minimal promise wrapper around IndexedDB. Data is local to this browser profile and is NOT encrypted. */
 
 const DB_NAME = 'gvr-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
-export type StoreName = 'sessions' | 'recordings' | 'narration';
+export type StoreName = 'sessions' | 'recordings' | 'narration' | 'patterns';
 
 let dbp: Promise<IDBDatabase> | null = null;
 
@@ -24,6 +24,8 @@ function open(): Promise<IDBDatabase> {
       }
       // Narration segments for the Voice Studio (Milestone 2): key = `${profile}:${segment}`.
       if (!db.objectStoreNames.contains('narration')) db.createObjectStore('narration', { keyPath: 'key' });
+      // User-confirmed emotional patterns (v2).
+      if (!db.objectStoreNames.contains('patterns')) db.createObjectStore('patterns', { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
