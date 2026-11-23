@@ -37,6 +37,8 @@ const STAGE_LABEL: Record<string, string> = {
   summary: 'Summary', followup: 'Follow-up', grounding: 'Grounding',
 };
 
+const SET_MODES = ['stim', 'res_stim', 'install_stim', 'bodyscan_stim'];
+
 const ENTRY_LABEL: Record<string, string> = {
   memory: 'Remembered experience', trigger: 'Present-day trigger', belief: 'Negative belief',
   pattern: 'Recurring pattern', reaction: 'Unexplained reaction',
@@ -454,7 +456,10 @@ export class App {
     const engine = new SessionEngine(def);
     if (parent) engine.answers.parentDate = fmtDate(parent.startedAt);
     if (fu) engine.answers.followUpKind = fu.kind;
-    if (def.id === GUIDED_SESSION.id) engine.answers.processingStyle = this.settings.get().processingStyle;
+    if (def.id === GUIDED_SESSION.id) {
+      engine.answers.processingStyle = this.settings.get().processingStyle;
+      engine.answers.sessionMinutes = this.settings.get().sessionMinutes;
+    }
     this.record = {
       id: uid('ses'),
       definitionId: def.id,
@@ -551,6 +556,19 @@ export class App {
         blocks.push({ kind: 'note', text, tone: n.tone });
       }
     }
+    const budget = Number(e.answers.sessionMinutes ?? 0);
+    if (budget && this.record && ['reflection', 'target_check', 'interweave', 'set_again', 'set_ready', 'install_check', 'bodyscan'].includes(step.id)) {
+      const elapsedMin = (Date.now() - Date.parse(this.record.startedAt)) / 60000;
+      const left = Math.round(budget - elapsedMin);
+      if (left <= 15) {
+        blocks.unshift({
+          kind: 'note', tone: 'warn',
+          text: left > 0
+            ? `About ${left} minute${left === 1 ? '' : 's'} left of your planned ${budget}-minute session. Therapists start closing around now so there is time to settle.`
+            : `You are past your planned ${budget} minutes. Closing now leaves time to settle before you take the headset off.`,
+        });
+      }
+    }
     for (const inp of e.visibleInputs()) {
       const field = e.resolveField(inp.field);
       const label = inp.label ? e.template(inp.label) : undefined;
@@ -587,7 +605,7 @@ export class App {
   }
 
   private actionsBlock(step: StepDef): Block {
-    const items = (step.actions ?? []).map((a) => ({ id: `act:${a.id}`, label: a.label, style: a.style ?? 'normal' }));
+    const items = this.engine!.visibleActions(step).map((a) => ({ id: `act:${a.id}`, label: a.label, style: a.style ?? 'normal' }));
     return { kind: 'buttons', items, columns: items.length > 3 ? 2 : items.length, height: 70 };
   }
 
@@ -660,11 +678,24 @@ export class App {
     if (neg) lines.push(`Belief: "${neg}"`);
     const pos = pick('posBelief', 'posBelief_text');
     if (pos) lines.push(`Preferred belief: "${pos}"`);
-    const suds = rec.ratings.filter((r) => r.field.startsWith('sud_'));
+    const suds = rec.ratings.filter((r) => r.field.startsWith('sud_') || r.field.startsWith('sudt_'));
     const sudStart = a.sud_0;
     const sudEnd = a.sud_end ?? (suds.length ? suds[suds.length - 1].value : undefined);
     if (sudStart !== undefined || sudEnd !== undefined) lines.push(`Distress: ${sudStart ?? '–'} at start → ${sudEnd ?? '–'} now (0–10)`);
     if (a.voc_0 !== undefined || a.voc_end !== undefined) lines.push(`Preferred belief felt true: ${a.voc_0 ?? '–'} → ${a.voc_end ?? '–'} (1–7)`);
+    if (a.processingStyle === 'standard') {
+      const last = (prefix: string) => {
+        const ks = Object.keys(a).filter((k) => new RegExp(`^${prefix}_\\d+$`).test(k)).sort((x, y) => Number(x.split('_')[1]) - Number(y.split('_')[1]));
+        return ks.length ? a[ks[ks.length - 1]] : undefined;
+      };
+      const sudt = last('sudt');
+      const voci = last('voci');
+      const scan = last('scan');
+      if (sudt !== undefined) lines.push(`Target at last check: ${sudt} / 10`);
+      if (voci !== undefined) lines.push(`Positive belief after installation: ${voci} / 7`);
+      if (scan !== undefined) lines.push(`Body scan: ${scan === 'clear' ? 'clear' : 'still some sensation'}`);
+      lines.push(sudt !== undefined && Number(sudt) <= 1 && scan === 'clear' ? 'Protocol completed for this target.' : 'Incomplete session — you can return to this target next time.');
+    }
     lines.push(`Stimulation sets: ${e.setCount}`);
     const clips = this.voice.size;
     if (clips) lines.push(`Voice recordings: ${clips}`);
@@ -783,7 +814,7 @@ export class App {
 
   private async abandonSession(): Promise<void> {
     const rec = this.record;
-    const hasData = rec && (Object.keys(rec.answers).some((k) => !['parentDate', 'followUpKind', 'processingStyle'].includes(k)) || rec.sets.length > 0 || this.voice.size > 0);
+    const hasData = rec && (Object.keys(rec.answers).some((k) => !['parentDate', 'followUpKind', 'processingStyle', 'sessionMinutes'].includes(k)) || rec.sets.length > 0 || this.voice.size > 0);
     if (rec && !hasData) {
       await this.journal.deleteSession(rec.id).catch(() => undefined);
       this.clearSession();
@@ -1032,6 +1063,9 @@ export class App {
     if (s.hapticsOn && this.xr.presenting && !this.haptics.available()) {
       blocks.push({ kind: 'note', text: 'No haptic-capable controllers detected. Everything else works without haptics.' });
     }
+    if (s.processingStyle === 'standard') {
+      blocks.push({ kind: 'note', text: 'Standard protocol: desensitization until the target feels 0–1, then installation and a body scan, like clinical EMDR. Ground and the dissociation stop still apply.' });
+    }
     if (s.pattern === 'arc') blocks.push({ kind: 'note', text: 'The arc pattern is experimental and nonstandard.', tone: 'warn' });
     blocks.push({ kind: 'lines', size: 21, lines: ['Changes apply from the next set. About 1 cycle per second with short sets is an illustrative research-reference setting, not a prescription.'] });
     blocks.push({
@@ -1229,7 +1263,7 @@ export class App {
     }
     const ratings = r.ratings.map((x) => `${x.field}=${x.value}`).join('  ');
     if (ratings) lines.push(`Ratings: ${ratings}`);
-    const sets = (r.sets as StimLog[]).filter((s) => s.mode === 'stim' || s.mode === 'res_stim');
+    const sets = (r.sets as StimLog[]).filter((s) => SET_MODES.includes(s.mode));
     if (sets.length) lines.push(`Sets: ${sets.map((s) => `${s.actualDuration.toFixed(0)}s${s.completed ? '' : '*'}`).join(', ')}  (* stopped early)`);
     const g = r.events.filter((e) => e.type === 'grounding').length;
     if (g) lines.push(`Grounding used ${g}×`);
@@ -1278,7 +1312,7 @@ function sessionLabel(s: SessionRecord): string {
     const r = scoreItq(s.answers);
     return `${fmtDate(s.startedAt)} · ITQ · PTSD ${r.ptsdTotal}, self-org ${r.dsoTotal}${s.status === 'completed' ? '' : ' · unfinished'}`;
   }
-  const sets = (s.sets as { mode?: string }[]).filter((x) => x.mode === 'stim' || x.mode === 'res_stim').length;
+  const sets = (s.sets as { mode?: string }[]).filter((x) => SET_MODES.includes(x.mode ?? '')).length;
   const a = s.answers;
   const sud = a.sud_0 !== undefined || a.sud_end !== undefined ? ` · distress ${a.sud_0 ?? '–'}→${a.sud_end ?? '–'}` : '';
   const status = s.status === 'completed' ? '' : s.status === 'in-progress' ? ' · interrupted' : ' · ended early';

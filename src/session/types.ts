@@ -46,8 +46,12 @@ export interface Condition {
   gte?: number;
   /** Numeric answer `field` <= lte. */
   lte?: number;
+  /** Answer `field` is not one of `notIn`. */
+  notIn?: string[];
   /** Completed set count >= n. */
   setCountGte?: number;
+  /** All of these must hold. */
+  all?: Condition[];
 }
 
 export interface Option {
@@ -75,6 +79,8 @@ export interface ActionDef {
   route?: RouteRule[];
   effects?: Effect[];
   style?: 'primary' | 'normal' | 'danger';
+  /** Only offered when this holds. */
+  when?: Condition;
 }
 
 export interface NoteRule {

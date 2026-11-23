@@ -60,6 +60,15 @@ Each stimulation set is logged with its settings snapshot, planned and actual du
 - **Focused processing (default):** based on stabilization-oriented "restricted" EMDR formats. Later sets return to the same narrow starting point instead of following associations. Gentle stopping cues appear when distress is low (≤ 2) or high (≥ 8), and after about six sets. You can switch to *Open* in Settings.
 - **Expanded present-moment check-in:** four questions (present, unreal, body, far away/foggy). Any "yes" stops stimulation for the session. These are the app's own prompts, not a validated scale.
 
+- **Standard protocol mode** (Settings → Processing style): the closest this app gets to a clinical EMDR session.
+  - *Desensitization:* "Go with that" chains sets on whatever comes up, and "Back to the target" re-checks the original memory's 0–10 rating. When the target reaches 0–1, the session moves on.
+  - *Cognitive interweaves:* the prompts therapists use when processing gets stuck.
+  - *Installation:* sets that pair the memory with your positive belief until it feels 6–7 on the 1–7 scale.
+  - *Body scan:* sets continue on any leftover sensation until the scan comes up clear.
+  - *Closure:* explains incomplete sessions.
+  - *Session time budget:* 30–120 min, default 60. A prompt to start closing appears with 15 minutes left.
+  - *Safeguards:* Ground and the dissociation stop still apply. High distress shows information, not a stop.
+
 What the research argued *against*: personalising eye-movement speed to working-memory capacity didn't help in controlled studies, so calibration stays about comfort. "EMDR 2.0"-style extra taxing showed no added effect.
 
 ## Verified vs. not verified

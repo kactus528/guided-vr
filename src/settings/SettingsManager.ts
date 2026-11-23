@@ -27,7 +27,8 @@ export interface Settings {
   // View
   viewMode: ViewMode;
   // Processing
-  processingStyle: 'restricted' | 'open';
+  processingStyle: 'restricted' | 'open' | 'standard';
+  sessionMinutes: number;
 }
 
 /**
@@ -55,6 +56,7 @@ export const DEFAULT_SETTINGS: Settings = {
   subtitles: true,
   viewMode: 'seated',
   processingStyle: 'restricted',
+  sessionMinutes: 60,
 };
 
 export const COLORS: { value: string; label: string }[] = [
@@ -106,10 +108,12 @@ export const SETTING_ROWS: SettingRow[] = [
   },
   {
     key: 'processingStyle', label: 'Processing style', kind: 'enum', options: [
-      { value: 'restricted', label: 'Focused (recommended)' },
+      { value: 'restricted', label: 'Focused' },
       { value: 'open', label: 'Open' },
+      { value: 'standard', label: 'Standard protocol' },
     ],
   },
+  { key: 'sessionMinutes', label: 'Session time', kind: 'number', min: 30, max: 120, step: 15, fmt: (v) => `${v} min` },
 ];
 
 const KEY = 'gvr.settings.v1';

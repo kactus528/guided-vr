@@ -2,7 +2,11 @@ import {
   ITQ_DSO_FI, ITQ_DSO_FI_INTRO, ITQ_DSO_INTRO, ITQ_DSO_ITEMS,
   ITQ_PTSD_FI, ITQ_PTSD_FI_INTRO, ITQ_PTSD_INTRO, ITQ_PTSD_ITEMS, ITQ_SCALE,
 } from '../measures/itq.js';
-import type { InputDef, SessionDefinition } from './types.js';
+import type { Condition, InputDef, SessionDefinition } from './types.js';
+
+/** Standard-protocol (closest to clinical EMDR) vs the other processing styles. */
+const STD: Condition = { field: 'processingStyle', in: ['standard'] };
+const NOT_STD: Condition = { field: 'processingStyle', notIn: ['standard'] };
 
 const NEG_BELIEFS = [
   "I'm not good enough",
@@ -272,6 +276,8 @@ export const GUIDED_SESSION: SessionDefinition = {
       bodyByAnswer: {
         field: 'processingStyle',
         map: {
+          standard:
+            'Bring up the picture that represents the worst part of it, together with the words "{{negBelief|negBelief_text}}", and notice where you feel it in your body. You don\'t need to force it — just let it be there.\n\nWhen you\'re ready, begin the set and let whatever happens, happen.',
           restricted:
             "Bring to mind just the specific part you named — one moment or situation, not the whole history — only as much as feels manageable. You don't need to hold onto it or make it stronger.\n\nWhen you're ready, begin the set.",
           '*': "Let what you chose come to mind, only as much as feels manageable. You don't need to hold onto it or make it stronger.\n\nWhen you're ready, begin the set.",
@@ -279,7 +285,7 @@ export const GUIDED_SESSION: SessionDefinition = {
       },
       narration: {
         segment: 'activation',
-        text: "Let what you chose come to mind, only as much as feels manageable. You don't need to hold onto it, or make it stronger. When you're ready, begin the set.",
+        text: "Bring it to mind, only as much as you choose. You don't need to force anything. When you're ready, begin the set.",
       },
       actions: [
         { id: 'begin', label: 'Begin set', goto: 'stim', style: 'primary' },
@@ -396,8 +402,10 @@ export const GUIDED_SESSION: SessionDefinition = {
         { when: { field: 'unreal_{set}', in: ['little'] }, text: 'If the sense of distance grows, choose Ground at any time.' },
         { when: { field: 'body_{set}', in: ['little'] }, text: 'If the sense of distance grows, choose Ground at any time.' },
         { when: { field: 'far_{set}', in: ['little'] }, text: 'If the sense of distance grows, choose Ground at any time.' },
-        { when: { field: 'sud_{set}', lte: 2 }, text: 'Distress is low right now — a natural point to move toward closing.' },
-        { when: { field: 'sud_{set}', gte: 8 }, tone: 'warn', text: 'Distress is high. Grounding or closing is usually a better next step than another set.' },
+        { when: { all: [NOT_STD, { field: 'sud_{set}', lte: 2 }] }, text: 'Distress is low right now — a natural point to move toward closing.' },
+        { when: { all: [NOT_STD, { field: 'sud_{set}', gte: 8 }] }, tone: 'warn', text: 'Distress is high. Grounding or closing is usually a better next step than another set.' },
+        { when: { all: [STD, { field: 'sud_{set}', lte: 2 }] }, text: 'Distress is low — a good moment to go back to the target and check it.' },
+        { when: { all: [STD, { field: 'sud_{set}', gte: 8 }] }, text: 'This is intense. In clinical EMDR, sets often continue through intense moments as long as you stay present in the room. Grounding or closing is just as valid — it is your call.' },
         { when: { field: 'processingStyle', in: ['restricted'], setCountGte: 6 }, text: 'Focused mode suggests stopping after about six sets. Unfinished material can wait for another day.' },
         { when: { setCountGte: 8 }, text: "You've done several sets. It's completely fine to close here." },
       ],
@@ -407,9 +415,129 @@ export const GUIDED_SESSION: SessionDefinition = {
         { kind: 'rating', field: 'sud_{set}', label: 'Distress right now (optional)', min: 0, max: 10, minLabel: 'None', maxLabel: 'Most imaginable' },
       ],
       actions: [
-        { id: 'again', label: 'Another set', goto: 'set_again' },
-        { id: 'close', label: 'Move toward closing', goto: 'positive_end', style: 'primary' },
+        { id: 'go', label: 'Go with that — next set', goto: 'stim', style: 'primary', when: STD },
+        { id: 'target', label: 'Back to the target', goto: 'target_check', when: STD },
+        { id: 'stuck', label: "I'm stuck or looping", goto: 'interweave', when: STD },
+        { id: 'again', label: 'Another set', goto: 'set_again', when: NOT_STD },
+        { id: 'close', label: 'Move toward closing', goto: 'positive_end', style: 'primary', when: NOT_STD },
+        { id: 'closeStd', label: 'Close for today', goto: 'closure', when: STD },
       ],
+    },
+    // Standard protocol: desensitization checks, interweaves, installation and body scan
+    {
+      id: 'target_check',
+      stage: 'reflection',
+      type: 'form',
+      environment: 'void',
+      title: 'Back to the target',
+      body: 'Bring up the original memory or situation, as it is now. What do you get?',
+      narration: { segment: 'target_check', text: 'Go back to the original memory. What do you get now?' },
+      inputs: [
+        { kind: 'voice', field: 'target_{set}_voice', label: 'Speak' },
+        { kind: 'rating', field: 'sudt_{set}', label: 'How disturbing does it feel now?', min: 0, max: 10, minLabel: 'Neutral', maxLabel: 'Most imaginable' },
+      ],
+      notes: [{ when: { setCountGte: 0 }, text: 'In the standard protocol, desensitization continues until the target feels 0–1. Then you move on to strengthening the positive belief.' }],
+      actions: [
+        {
+          id: 'continue', label: 'Continue', style: 'primary', goto: 'stim',
+          route: [{ when: { field: 'sudt_{set}', lte: 1 }, goto: 'install_intro' }],
+        },
+        { id: 'stuck', label: "I'm stuck or looping", goto: 'interweave' },
+        { id: 'close', label: 'Close for today', goto: 'closure' },
+      ],
+    },
+    {
+      id: 'interweave',
+      stage: 'reflection',
+      type: 'form',
+      environment: 'void',
+      title: 'Feeling stuck',
+      body:
+        'When processing loops, therapists offer a short question — a cognitive interweave — to help it move. Pick one that fits, notice your answer, then do another set with it in mind.',
+      inputs: [{
+        kind: 'chips', field: 'interweave_{set}', multi: false, items: [
+          "What do you know now that you didn't know then?",
+          'Whose responsibility was it, really?',
+          'Are you safe now?',
+          'How old were you then — and how old are you now?',
+          'What would you say to a friend this happened to?',
+          'What did that younger you need?',
+          'Could you really have done anything else back then?',
+        ],
+      }],
+      actions: [
+        { id: 'go', label: 'Set with that in mind', goto: 'stim', style: 'primary' },
+        { id: 'target', label: 'Back to the target', goto: 'target_check' },
+        { id: 'close', label: 'Close for today', goto: 'closure' },
+      ],
+    },
+    {
+      id: 'install_intro',
+      stage: 'integration',
+      type: 'form',
+      environment: 'void',
+      when: { anyPresent: ['posBelief', 'posBelief_text'] },
+      next: 'bodyscan',
+      title: 'Installation',
+      body:
+        'The target feels close to neutral. Earlier you chose: "{{posBelief|posBelief_text}}". Does that still fit, or is there a better way to put it?\n\nHold the memory and the belief together while the light moves.',
+      inputs: [{ kind: 'text', field: 'posBelief_revised', label: 'Better wording (optional)' }],
+      actions: [{ id: 'begin', label: 'Begin installation set', goto: 'install_stim', style: 'primary' }],
+    },
+    {
+      id: 'install_stim',
+      stage: 'stimulation',
+      type: 'stimulation',
+      environment: 'void',
+      title: 'Installation set',
+      stim: { countsAsSet: true },
+      next: 'install_check',
+    },
+    {
+      id: 'install_check',
+      stage: 'integration',
+      type: 'form',
+      environment: 'void',
+      title: 'How true does it feel?',
+      body: 'Think of the memory and the words "{{posBelief_revised|posBelief|posBelief_text}}".',
+      inputs: [{ kind: 'rating', field: 'voci_{set}', label: 'How true do the words feel now?', min: 1, max: 7, minLabel: 'Not at all', maxLabel: 'Completely' }],
+      notes: [{ when: { setCountGte: 0 }, text: 'Installation usually continues until the belief feels 6–7. If it stays lower, that is fine — move on when you are ready.' }],
+      actions: [
+        {
+          id: 'continue', label: 'Continue', style: 'primary', goto: 'install_stim',
+          route: [{ when: { field: 'voci_{set}', gte: 6 }, goto: 'bodyscan' }],
+        },
+        { id: 'move', label: 'Move on to the body scan', goto: 'bodyscan' },
+      ],
+    },
+    {
+      id: 'bodyscan',
+      stage: 'body',
+      type: 'form',
+      environment: 'void',
+      title: 'Body scan',
+      body: 'Hold the memory and the positive belief in mind. Starting at the top of your head, slowly scan down through your body. Notice any tension, tightness, or unusual sensation.',
+      narration: { segment: 'bodyscan', text: 'Hold the memory and the positive belief in mind, and slowly scan down through your body. Notice any tension, or anything unusual.' },
+      inputs: [{
+        kind: 'choice', field: 'scan_{set}', options: [
+          { value: 'clear', label: 'Clear or neutral' },
+          { value: 'positive', label: 'Something pleasant' },
+          { value: 'tension', label: 'Some tension or discomfort' },
+        ],
+      }],
+      actions: [{
+        id: 'continue', label: 'Continue', style: 'primary', goto: 'closure',
+        route: [{ when: { field: 'scan_{set}', in: ['tension', 'positive'] }, goto: 'bodyscan_stim' }],
+      }, { id: 'close', label: 'Close for today', goto: 'closure' }],
+    },
+    {
+      id: 'bodyscan_stim',
+      stage: 'stimulation',
+      type: 'stimulation',
+      environment: 'void',
+      title: 'Body set',
+      stim: { countsAsSet: true },
+      next: 'bodyscan',
     },
     // 8. Optional additional sets — no re-activation
     {
@@ -479,6 +607,10 @@ export const GUIDED_SESSION: SessionDefinition = {
         segment: 'closure',
         text: "We're coming to the end. Whatever is unfinished can be set aside for now. You might imagine placing it in a container you can come back to later. Take a slower breath. Feel the support beneath you, and notice the room you're in.",
       },
+      notes: [{
+        when: STD,
+        text: 'If the memory still has some charge, that is normal — clinicians call it an incomplete session. Processing often keeps settling over the next days. Next time you can return to the same target.',
+      }],
       inputs: [
         { kind: 'rating', field: 'sud_end', label: 'Distress right now (optional)', min: 0, max: 10, minLabel: 'None', maxLabel: 'Most imaginable' },
       ],

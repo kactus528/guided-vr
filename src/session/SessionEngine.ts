@@ -63,11 +63,17 @@ export class SessionEngine {
     if (c.field !== undefined) {
       const v = this.answers[this.resolveField(c.field)];
       if (c.in && !c.in.includes(String(v))) return false;
+      if (c.notIn && c.notIn.includes(String(v))) return false;
       if (c.gte !== undefined && !(typeof v === 'number' && v >= c.gte)) return false;
       if (c.lte !== undefined && !(typeof v === 'number' && v <= c.lte)) return false;
     }
     if (c.setCountGte !== undefined && this.setCount < c.setCountGte) return false;
+    if (c.all && !c.all.every((x) => this.evaluate(x))) return false;
     return true;
+  }
+
+  visibleActions(step: StepDef = this.current): ActionDef[] {
+    return (step.actions ?? []).filter((a) => this.evaluate(a.when));
   }
 
   visibleInputs(step: StepDef = this.current): InputDef[] {
@@ -101,7 +107,7 @@ export class SessionEngine {
 
   /** Perform an action on the current step. Returns its effects (already applied to engine state). */
   act(actionId: string): Effect[] {
-    const a: ActionDef | undefined = this.current.actions?.find((x) => x.id === actionId);
+    const a: ActionDef | undefined = this.visibleActions().find((x) => x.id === actionId);
     if (!a) throw new Error(`No action ${actionId} on ${this.current.id}`);
     let effects = [...(a.effects ?? [])];
     let goto = a.goto;
